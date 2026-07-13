@@ -1,0 +1,580 @@
+@import 'highlight.js/styles/github.css';
+@import 'katex/dist/katex.min.css';
+
+:root {
+  color: #24211e;
+  background: #fbfaf8;
+  font-family:
+    ui-serif, 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, 'Times New Roman', serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(251, 250, 248, 0.96)),
+    #fbfaf8;
+}
+
+button {
+  appearance: none;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  font: 600 14px/1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  transition:
+    transform 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.68;
+}
+
+button:hover {
+  transform: translateY(-1px);
+}
+
+button:disabled:hover {
+  transform: none;
+}
+
+button:focus-visible {
+  outline: 3px solid rgba(43, 119, 183, 0.34);
+  outline-offset: 2px;
+}
+
+.welcome {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 48px 28px;
+}
+
+.welcome__content {
+  width: min(720px, 100%);
+  text-align: center;
+}
+
+.welcome__eyebrow {
+  margin: 0 0 18px;
+  color: #7b6251;
+  font: 700 13px/1.2 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.welcome h1 {
+  margin: 0 auto 28px;
+  max-width: 650px;
+  color: #28231f;
+  font-size: clamp(38px, 8vw, 76px);
+  line-height: 0.98;
+  letter-spacing: 0;
+}
+
+.welcome__actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.primary-button,
+.secondary-button {
+  min-height: 40px;
+  padding: 0 18px;
+  color: #fff;
+  background: #2d6f7a;
+  box-shadow: 0 10px 24px rgba(45, 111, 122, 0.22);
+}
+
+.primary-button {
+  min-width: 190px;
+}
+
+.primary-button:hover,
+.secondary-button:hover {
+  background: #245d67;
+}
+
+.secondary-button {
+  flex: 0 0 auto;
+  min-width: 76px;
+}
+
+.primary-button--compact {
+  min-width: 76px;
+}
+
+/* Electron treats this blank top strip like a native titlebar: it can drag the
+   window, and double-clicking it toggles maximize/restore on supported systems. */
+.window-drag-region {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 10;
+  height: 36px;
+  -webkit-app-region: drag;
+}
+
+.reader {
+  width: min(900px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 44px 0 84px;
+}
+
+.reader--embedded {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 44px 32px 72px;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.folder-sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  overflow: auto;
+  border-right: 1px solid rgba(57, 50, 43, 0.1);
+  padding: 52px 14px 24px;
+  background: rgba(244, 241, 236, 0.84);
+  -webkit-app-region: no-drag;
+}
+
+.folder-sidebar__header {
+  padding: 0 10px 14px;
+  border-bottom: 1px solid rgba(57, 50, 43, 0.1);
+}
+
+.folder-sidebar__header p {
+  margin: 0 0 5px;
+  color: #8a7565;
+  font: 700 11px/1.2 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.folder-sidebar__header h2 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #25211d;
+  font: 700 16px/1.25 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.folder-sidebar__empty,
+.workspace__empty {
+  color: #7a6b61;
+  font: 500 14px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.folder-sidebar__empty {
+  margin: 16px 10px 0;
+}
+
+.folder-tree {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  font: 500 13px/1.35 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.folder-tree .folder-tree {
+  margin-top: 4px;
+  padding-left: 14px;
+}
+
+.folder-tree li {
+  margin: 2px 0;
+}
+
+.folder-tree summary {
+  min-height: 30px;
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: #5e5148;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.folder-tree summary:hover {
+  background: rgba(45, 111, 122, 0.08);
+}
+
+.folder-tree button {
+  display: block;
+  width: 100%;
+  min-height: 30px;
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: transparent;
+  box-shadow: none;
+  color: #4a4038;
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.folder-tree button:hover {
+  transform: none;
+  background: rgba(45, 111, 122, 0.08);
+}
+
+.folder-tree button.is-active {
+  color: #fff;
+  background: #2d6f7a;
+}
+
+.workspace__empty {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  padding: 52px 24px;
+  text-align: center;
+}
+
+.reader__header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 76px;
+  margin: 0 0 28px;
+  padding: 16px 0;
+  border-bottom: 1px solid rgba(57, 50, 43, 0.1);
+  background: rgba(251, 250, 248, 0.9);
+  backdrop-filter: blur(18px);
+}
+
+.reader__header h1 {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+  color: #25211d;
+  font: 700 22px/1.2 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.reader__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  -webkit-app-region: no-drag;
+}
+
+.reader__path {
+  margin: 0;
+  max-width: 690px;
+  overflow: hidden;
+  color: #8a7565;
+  font: 500 12px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reader__message {
+  margin: -12px 0 18px;
+  color: #66715c;
+  font: 600 13px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.segmented-control {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid rgba(57, 50, 43, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.segmented-control button {
+  min-height: 38px;
+  border-radius: 0;
+  padding: 0 13px;
+  color: #5e5148;
+  background: transparent;
+  box-shadow: none;
+}
+
+.segmented-control button:hover {
+  transform: none;
+  background: rgba(45, 111, 122, 0.08);
+}
+
+.segmented-control button.is-active {
+  color: #fff;
+  background: #2d6f7a;
+}
+
+.markdown-editor {
+  display: block;
+  width: 100%;
+  min-height: calc(100vh - 190px);
+  resize: vertical;
+  border: 1px solid rgba(57, 50, 43, 0.14);
+  border-radius: 8px;
+  padding: 22px 24px;
+  background: rgba(255, 255, 255, 0.68);
+  color: #292521;
+  font: 16px/1.65 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  outline: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.reader--embedded .markdown-editor {
+  min-height: calc(100vh - 190px);
+}
+
+.markdown-editor:focus {
+  border-color: rgba(45, 111, 122, 0.48);
+  box-shadow:
+    0 0 0 3px rgba(45, 111, 122, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.markdown-body {
+  color: #292521;
+  font-size: 18px;
+  line-height: 1.75;
+  overflow-wrap: break-word;
+}
+
+.markdown-body .math--block {
+  margin: 1.4em 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.markdown-body .mermaid {
+  display: flex;
+  justify-content: center;
+  margin: 1.6em 0;
+  overflow-x: auto;
+}
+
+.markdown-body .mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin: 2em 0 0.75em;
+  color: #1f1c19;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  line-height: 1.22;
+  letter-spacing: 0;
+}
+
+.markdown-body h1 {
+  font-size: 2.25rem;
+}
+
+.markdown-body h2 {
+  padding-bottom: 0.28em;
+  border-bottom: 1px solid rgba(57, 50, 43, 0.12);
+  font-size: 1.72rem;
+}
+
+.markdown-body h3 {
+  font-size: 1.34rem;
+}
+
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body blockquote,
+.markdown-body table,
+.markdown-body pre {
+  margin: 1.05em 0;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.5em;
+}
+
+.markdown-body .task-list-item {
+  list-style: none;
+}
+
+.markdown-body .task-list-item-checkbox {
+  width: 1em;
+  height: 1em;
+  margin: 0 0.45em 0 -1.35em;
+  vertical-align: -0.12em;
+  accent-color: #2d6f7a;
+}
+
+.markdown-body li + li {
+  margin-top: 0.35em;
+}
+
+.markdown-body blockquote {
+  padding: 0.2em 0 0.2em 1.15em;
+  border-left: 4px solid #8aa8a0;
+  color: #5f544c;
+}
+
+.markdown-body a {
+  color: #1f6e8a;
+  text-decoration-color: rgba(31, 110, 138, 0.32);
+  text-underline-offset: 0.2em;
+}
+
+.markdown-body code {
+  border-radius: 5px;
+  padding: 0.18em 0.36em;
+  background: #efeae3;
+  color: #5f3f2b;
+  font: 0.88em/1.5 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+.markdown-body pre {
+  overflow: auto;
+  border: 1px solid rgba(57, 50, 43, 0.1);
+  border-radius: 8px;
+  padding: 18px 20px;
+  background: #f4f1ec;
+}
+
+.markdown-body pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.markdown-body table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 0.95em;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid rgba(57, 50, 43, 0.16);
+  padding: 9px 12px;
+}
+
+.markdown-body th {
+  background: #f1ece5;
+  font-weight: 700;
+}
+
+.markdown-body tr:nth-child(even) td {
+  background: rgba(244, 241, 236, 0.48);
+}
+
+.markdown-body img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1.5em auto;
+  border-radius: 8px;
+}
+
+.markdown-body hr {
+  height: 1px;
+  margin: 2.2em 0;
+  border: 0;
+  background: rgba(57, 50, 43, 0.16);
+}
+
+.markdown-body del {
+  color: #7a6b61;
+}
+
+@media (max-width: 720px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .folder-sidebar {
+    position: relative;
+    height: auto;
+    max-height: 42vh;
+    border-right: 0;
+    border-bottom: 1px solid rgba(57, 50, 43, 0.1);
+    padding-top: 42px;
+  }
+
+  .reader {
+    width: min(100% - 32px, 900px);
+    padding-top: 20px;
+  }
+
+  .reader--embedded {
+    width: 100%;
+    padding: 20px 16px 64px;
+  }
+
+  .reader__header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .reader__actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .segmented-control {
+    flex: 1 1 180px;
+  }
+
+  .segmented-control button {
+    flex: 1;
+  }
+
+  .reader__path {
+    max-width: calc(100vw - 32px);
+  }
+
+  .secondary-button {
+    flex: 1 1 96px;
+  }
+
+  .primary-button--compact {
+    flex: 1 1 96px;
+  }
+
+  .markdown-body {
+    font-size: 17px;
+  }
+}

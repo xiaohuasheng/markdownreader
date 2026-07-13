@@ -1,0 +1,9 @@
+node_modules/
+out/
+release/
+release-native/
+build/
+dist/
+.DS_Store
+*.tsbuildinfo
+npm-debug.log*

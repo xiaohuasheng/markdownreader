@@ -1,0 +1,33 @@
+name: 发布 macOS 制品
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建 macOS 安装包
+        run: npm run package:mac
+
+      - name: 创建 GitHub Release 并上传 DMG
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/*.dmg --title "Markdown Reader $GITHUB_REF_NAME" --generate-notes

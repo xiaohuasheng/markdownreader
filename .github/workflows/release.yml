@@ -25,7 +25,9 @@ jobs:
         run: npm ci
 
       - name: 构建 macOS 安装包
-        run: npm run package:mac
+        run: |
+          npm run build
+          npx electron-builder --mac --publish never
 
       - name: 创建 GitHub Release 并上传 DMG
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65

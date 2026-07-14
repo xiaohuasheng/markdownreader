@@ -27,7 +27,15 @@ jobs:
       - name: 构建 macOS 安装包
         run: npm run package:mac
 
-      - name: 创建 GitHub Release 并上传 DMG
+      - name: 创建 GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release/*.dmg --title "Markdown Reader $GITHUB_REF_NAME" --generate-notes
+        run: gh release view "$GITHUB_REF_NAME" || gh release create "$GITHUB_REF_NAME" --title "Markdown Reader $GITHUB_REF_NAME" --generate-notes
+
+      - name: 上传 DMG
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dmg_path=$(find release -maxdepth 1 -type f -name '*.dmg' -print -quit)
+          test -n "$dmg_path"
+          gh release upload "$GITHUB_REF_NAME" "$dmg_path" --clobber

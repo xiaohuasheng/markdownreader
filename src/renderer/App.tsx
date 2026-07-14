@@ -1,10 +1,83 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import mermaid from 'mermaid'
 import { renderHtml, renderMarkdown } from './markdown'
 import type { MarkdownFile, MarkdownFileTreeNode, MarkdownFolder } from '../preload/preload'
 
 type ViewMode = 'edit' | 'preview'
+
+const searchMatchSelector = 'mark[data-document-search-match]'
+
+function clearSearchHighlights(root: HTMLElement): void {
+  root.querySelectorAll<HTMLElement>(searchMatchSelector).forEach((match) => {
+    const parent = match.parentNode
+
+    if (!parent) {
+      return
+    }
+
+    parent.replaceChild(document.createTextNode(match.textContent ?? ''), match)
+    parent.normalize()
+  })
+}
+
+function highlightSearchMatches(root: HTMLElement, query: string): HTMLElement[] {
+  clearSearchHighlights(root)
+
+  if (!query) {
+    return []
+  }
+
+  const textNodes: Text[] = []
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      return node.textContent ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+    }
+  })
+
+  while (walker.nextNode()) {
+    textNodes.push(walker.currentNode as Text)
+  }
+
+  const normalizedQuery = query.toLocaleLowerCase()
+  const matches: HTMLElement[] = []
+
+  textNodes.forEach((textNode) => {
+    const source = textNode.textContent ?? ''
+    const normalizedSource = source.toLocaleLowerCase()
+    let matchStart = normalizedSource.indexOf(normalizedQuery)
+
+    if (matchStart === -1) {
+      return
+    }
+
+    const fragment = document.createDocumentFragment()
+    let cursor = 0
+
+    while (matchStart !== -1) {
+      if (matchStart > cursor) {
+        fragment.append(source.slice(cursor, matchStart))
+      }
+
+      const match = document.createElement('mark')
+      match.dataset.documentSearchMatch = 'true'
+      match.textContent = source.slice(matchStart, matchStart + query.length)
+      fragment.append(match)
+      matches.push(match)
+
+      cursor = matchStart + query.length
+      matchStart = normalizedSource.indexOf(normalizedQuery, cursor)
+    }
+
+    if (cursor < source.length) {
+      fragment.append(source.slice(cursor))
+    }
+
+    textNode.parentNode?.replaceChild(fragment, textNode)
+  })
+
+  return matches
+}
 
 mermaid.initialize({
   startOnLoad: false,
@@ -114,10 +187,19 @@ function Reader({
   isEmbedded?: boolean
 }): ReactElement {
   const isReadOnly = file.kind === 'html'
+  const previewRef = useRef<HTMLElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchMatchCount, setSearchMatchCount] = useState(0)
+  const [activeSearchIndex, setActiveSearchIndex] = useState(0)
   const html = useMemo(
     () => (isReadOnly ? renderHtml(file.content) : renderMarkdown(file.content, file.directory)),
     [file.content, file.directory, isReadOnly]
   )
+  // 搜索状态变化会触发 Reader 重渲染。保持 innerHTML 属性对象稳定，避免 React
+  // 用原始 HTML 覆盖运行时插入的搜索高亮节点，导致后续无法定位滚动目标。
+  const renderedHtml = useMemo(() => ({ __html: html }), [html])
 
   useEffect(() => {
     if (mode !== 'preview') {
@@ -131,48 +213,161 @@ function Reader({
     })
   }, [html, mode])
 
+  useEffect(() => {
+    const preview = previewRef.current
+
+    if (!preview || mode !== 'preview') {
+      return
+    }
+
+    const matches = highlightSearchMatches(preview, searchQuery.trim())
+    setSearchMatchCount(matches.length)
+    setActiveSearchIndex((currentIndex) => (matches.length > 0 ? Math.min(currentIndex, matches.length - 1) : 0))
+
+    return () => clearSearchHighlights(preview)
+  }, [html, mode, searchQuery])
+
+  useEffect(() => {
+    const preview = previewRef.current
+
+    if (!preview || searchMatchCount === 0) {
+      return
+    }
+
+    const matches = Array.from(preview.querySelectorAll<HTMLElement>(searchMatchSelector))
+    const activeMatch = matches[activeSearchIndex]
+
+    matches.forEach((match, index) => match.classList.toggle('is-active', index === activeSearchIndex))
+    activeMatch?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [activeSearchIndex, searchMatchCount])
+
+  useEffect(() => {
+    setIsSearchOpen(false)
+    setSearchQuery('')
+    setSearchMatchCount(0)
+    setActiveSearchIndex(0)
+  }, [file.path])
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent): void {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
+        event.preventDefault()
+        onModeChange('preview')
+        setIsSearchOpen(true)
+        requestAnimationFrame(() => searchInputRef.current?.focus())
+      }
+
+      if (event.key === 'Escape' && isSearchOpen) {
+        setIsSearchOpen(false)
+        setSearchQuery('')
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isSearchOpen, onModeChange])
+
+  function openSearch(): void {
+    onModeChange('preview')
+    setIsSearchOpen(true)
+    requestAnimationFrame(() => searchInputRef.current?.focus())
+  }
+
+  function moveSearchMatch(direction: 1 | -1): void {
+    if (searchMatchCount === 0) {
+      return
+    }
+
+    setActiveSearchIndex((currentIndex) => (currentIndex + direction + searchMatchCount) % searchMatchCount)
+  }
+
   return (
     <main className={isEmbedded ? 'reader reader--embedded' : 'reader'}>
-      <header className="reader__header">
-        <div>
-          <p className="reader__path">{file.path}</p>
-          <h1>{file.fileName}</h1>
-        </div>
-        <div className="reader__actions">
-          {!isReadOnly && (
-            <div className="segmented-control" aria-label="View mode">
-              <button
-                className={mode === 'edit' ? 'is-active' : ''}
-                type="button"
-                onClick={() => onModeChange('edit')}
-              >
-                Edit
-              </button>
-              <button
-                className={mode === 'preview' ? 'is-active' : ''}
-                type="button"
-                onClick={() => onModeChange('preview')}
-              >
-                Preview
-              </button>
-            </div>
-          )}
-          <button className="secondary-button" type="button" onClick={() => window.markdownReader.openFile()}>
-            Open
-          </button>
-          <button className="secondary-button" type="button" onClick={() => window.markdownReader.openFolder()}>
-            Folder
-          </button>
-          <button className="secondary-button" type="button" onClick={() => window.markdownReader.openFolderInNewWindow()}>
-            New Folder Window
-          </button>
-          {!isReadOnly && (
-            <button className="primary-button primary-button--compact" type="button" disabled={isSaving} onClick={onSave}>
-              {isSaving ? 'Saving' : 'Save'}
+      <div className="reader__sticky-tools">
+        <header className="reader__header">
+          <div>
+            <p className="reader__path">{file.path}</p>
+            <h1>{file.fileName}</h1>
+          </div>
+          <div className="reader__actions">
+            {!isReadOnly && (
+              <div className="segmented-control" aria-label="View mode">
+                <button
+                  className={mode === 'edit' ? 'is-active' : ''}
+                  type="button"
+                  onClick={() => onModeChange('edit')}
+                >
+                  Edit
+                </button>
+                <button
+                  className={mode === 'preview' ? 'is-active' : ''}
+                  type="button"
+                  onClick={() => onModeChange('preview')}
+                >
+                  Preview
+                </button>
+              </div>
+            )}
+            <button className="secondary-button" type="button" onClick={() => window.markdownReader.openFile()}>
+              Open
             </button>
-          )}
-        </div>
-      </header>
+            <button className="secondary-button" type="button" onClick={() => window.markdownReader.openFolder()}>
+              Folder
+            </button>
+            <button className="secondary-button" type="button" onClick={() => window.markdownReader.openFolderInNewWindow()}>
+              New Folder Window
+            </button>
+            <button className="secondary-button" type="button" onClick={openSearch}>
+              Find
+            </button>
+            {!isReadOnly && (
+              <button className="primary-button primary-button--compact" type="button" disabled={isSaving} onClick={onSave}>
+                {isSaving ? 'Saving' : 'Save'}
+              </button>
+            )}
+          </div>
+        </header>
+        {isSearchOpen && (
+          <div className="document-search" role="search" aria-label="Search in document">
+            <input
+              ref={searchInputRef}
+              type="search"
+              value={searchQuery}
+              placeholder="Find in document"
+              aria-label="Find in document"
+              onChange={(event) => {
+                setSearchQuery(event.target.value)
+                setActiveSearchIndex(0)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  moveSearchMatch(event.shiftKey ? -1 : 1)
+                }
+              }}
+            />
+            <span className="document-search__count" aria-live="polite">
+              {searchQuery.trim() ? `${searchMatchCount === 0 ? 0 : activeSearchIndex + 1} / ${searchMatchCount}` : 'Type to search'}
+            </span>
+            <button type="button" aria-label="Previous match" disabled={searchMatchCount === 0} onClick={() => moveSearchMatch(-1)}>
+              Previous
+            </button>
+            <button type="button" aria-label="Next match" disabled={searchMatchCount === 0} onClick={() => moveSearchMatch(1)}>
+              Next
+            </button>
+            <button
+              type="button"
+              aria-label="Close search"
+              onClick={() => {
+                setIsSearchOpen(false)
+                setSearchQuery('')
+              }}
+            >
+              Close
+            </button>
+          </div>
+        )}
+      </div>
       {message && <p className="reader__message">{message}</p>}
       {!isReadOnly && mode === 'edit' ? (
         <textarea
@@ -183,7 +378,7 @@ function Reader({
           onChange={(event) => onDraftChange(event.target.value)}
         />
       ) : (
-        <article className="markdown-body" dangerouslySetInnerHTML={{ __html: html }} />
+        <article ref={previewRef} className="markdown-body" dangerouslySetInnerHTML={renderedHtml} />
       )}
     </main>
   )

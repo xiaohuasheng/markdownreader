@@ -5,8 +5,14 @@ import { renderHtml, renderMarkdown } from './markdown'
 import type { MarkdownFile, MarkdownFileTreeNode, MarkdownFolder } from '../preload/preload'
 
 type ViewMode = 'edit' | 'preview'
+type DocumentOutlineItem = {
+  id: string
+  level: number
+  text: string
+}
 
 const searchMatchSelector = 'mark[data-document-search-match]'
+const outlineHeadingSelector = 'h1, h2, h3, h4, h5, h6'
 
 function clearSearchHighlights(root: HTMLElement): void {
   root.querySelectorAll<HTMLElement>(searchMatchSelector).forEach((match) => {
@@ -187,12 +193,17 @@ function Reader({
   isEmbedded?: boolean
 }): ReactElement {
   const isReadOnly = file.kind === 'html'
+  const readerRef = useRef<HTMLElement>(null)
+  const stickyToolsRef = useRef<HTMLDivElement>(null)
   const previewRef = useRef<HTMLElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMatchCount, setSearchMatchCount] = useState(0)
   const [activeSearchIndex, setActiveSearchIndex] = useState(0)
+  const [outlineItems, setOutlineItems] = useState<DocumentOutlineItem[]>([])
+  const [activeOutlineId, setActiveOutlineId] = useState('')
+  const [isOutlineCollapsed, setIsOutlineCollapsed] = useState(false)
   const html = useMemo(
     () => (isReadOnly ? renderHtml(file.content) : renderMarkdown(file.content, file.directory)),
     [file.content, file.directory, isReadOnly]
@@ -200,6 +211,36 @@ function Reader({
   // 搜索状态变化会触发 Reader 重渲染。保持 innerHTML 属性对象稳定，避免 React
   // 用原始 HTML 覆盖运行时插入的搜索高亮节点，导致后续无法定位滚动目标。
   const renderedHtml = useMemo(() => ({ __html: html }), [html])
+  const showsOutline = mode === 'preview' && outlineItems.length > 0
+  const readerClassName = [
+    'reader',
+    isEmbedded ? 'reader--embedded' : '',
+    showsOutline ? 'reader--with-outline' : ''
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+  useEffect(() => {
+    const reader = readerRef.current
+    const stickyTools = stickyToolsRef.current
+
+    if (!reader || !stickyTools) {
+      return
+    }
+
+    const updateStickyToolsHeight = (): void => {
+      reader.style.setProperty('--reader-sticky-tools-height', `${Math.ceil(stickyTools.offsetHeight)}px`)
+    }
+
+    updateStickyToolsHeight()
+    const resizeObserver = new ResizeObserver(updateStickyToolsHeight)
+    resizeObserver.observe(stickyTools)
+
+    return () => {
+      resizeObserver.disconnect()
+      reader.style.removeProperty('--reader-sticky-tools-height')
+    }
+  }, [])
 
   useEffect(() => {
     if (mode !== 'preview') {
@@ -226,6 +267,88 @@ function Reader({
 
     return () => clearSearchHighlights(preview)
   }, [html, mode, searchQuery])
+
+  useEffect(() => {
+    const preview = previewRef.current
+
+    if (!preview || mode !== 'preview') {
+      setOutlineItems([])
+      setActiveOutlineId('')
+      return
+    }
+
+    const headings = Array.from(preview.querySelectorAll<HTMLHeadingElement>(outlineHeadingSelector))
+    const items = headings.flatMap<DocumentOutlineItem>((heading, index) => {
+      const text = heading.textContent?.trim() ?? ''
+
+      if (!text) {
+        return []
+      }
+
+      const id = `document-outline-heading-${index}`
+      heading.id = id
+      heading.dataset.documentOutlineHeading = 'true'
+
+      return [{ id, level: Number(heading.tagName.slice(1)), text }]
+    })
+
+    setOutlineItems(items)
+    setActiveOutlineId((currentId) => (items.some((item) => item.id === currentId) ? currentId : (items[0]?.id ?? '')))
+
+    return () => {
+      headings.forEach((heading) => {
+        if (heading.dataset.documentOutlineHeading === 'true') {
+          heading.removeAttribute('id')
+          delete heading.dataset.documentOutlineHeading
+        }
+      })
+    }
+  }, [html, mode])
+
+  useEffect(() => {
+    if (!showsOutline) {
+      return
+    }
+
+    let animationFrame = 0
+
+    const updateActiveOutline = (): void => {
+      animationFrame = 0
+      const stickyBottom = stickyToolsRef.current?.getBoundingClientRect().bottom ?? 0
+      let currentId = outlineItems[0]?.id ?? ''
+
+      for (const item of outlineItems) {
+        const heading = document.getElementById(item.id)
+
+        if (!heading || heading.getBoundingClientRect().top > stickyBottom + 28) {
+          break
+        }
+
+        currentId = item.id
+      }
+
+      setActiveOutlineId((previousId) => (previousId === currentId ? previousId : currentId))
+    }
+
+    const scheduleActiveOutlineUpdate = (): void => {
+      if (!animationFrame) {
+        animationFrame = window.requestAnimationFrame(updateActiveOutline)
+      }
+    }
+
+    updateActiveOutline()
+    window.addEventListener('scroll', scheduleActiveOutlineUpdate, { passive: true })
+    window.addEventListener('resize', scheduleActiveOutlineUpdate)
+
+    return () => {
+      window.removeEventListener('scroll', scheduleActiveOutlineUpdate)
+      window.removeEventListener('resize', scheduleActiveOutlineUpdate)
+
+      if (animationFrame) {
+        window.cancelAnimationFrame(animationFrame)
+      }
+    }
+  }, [outlineItems, showsOutline])
 
   useEffect(() => {
     const preview = previewRef.current
@@ -281,9 +404,20 @@ function Reader({
     setActiveSearchIndex((currentIndex) => (currentIndex + direction + searchMatchCount) % searchMatchCount)
   }
 
+  function jumpToOutlineItem(item: DocumentOutlineItem): void {
+    const heading = document.getElementById(item.id)
+
+    if (!heading) {
+      return
+    }
+
+    setActiveOutlineId(item.id)
+    heading.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
   return (
-    <main className={isEmbedded ? 'reader reader--embedded' : 'reader'}>
-      <div className="reader__sticky-tools">
+    <main ref={readerRef} className={readerClassName}>
+      <div ref={stickyToolsRef} className="reader__sticky-tools">
         <header className="reader__header">
           <div>
             <p className="reader__path">{file.path}</p>
@@ -378,7 +512,51 @@ function Reader({
           onChange={(event) => onDraftChange(event.target.value)}
         />
       ) : (
-        <article ref={previewRef} className="markdown-body" dangerouslySetInnerHTML={renderedHtml} />
+        <div
+          className={`reader__document-layout${showsOutline ? ' reader__document-layout--with-outline' : ''}${
+            showsOutline && isOutlineCollapsed ? ' reader__document-layout--outline-collapsed' : ''
+          }`}
+        >
+          <article ref={previewRef} className="markdown-body" dangerouslySetInnerHTML={renderedHtml} />
+          {showsOutline && (
+            <aside className={`document-outline${isOutlineCollapsed ? ' document-outline--collapsed' : ''}`} aria-label="Document outline">
+              <div className="document-outline__header">
+                {!isOutlineCollapsed && <p>Outline</p>}
+                <button
+                  className="document-outline__toggle"
+                  type="button"
+                  aria-label={isOutlineCollapsed ? 'Expand document outline' : 'Collapse document outline'}
+                  aria-expanded={!isOutlineCollapsed}
+                  title={isOutlineCollapsed ? 'Expand outline' : 'Collapse outline'}
+                  onClick={() => setIsOutlineCollapsed((collapsed) => !collapsed)}
+                >
+                  {isOutlineCollapsed ? '‹' : '›'}
+                </button>
+              </div>
+              {!isOutlineCollapsed && (
+                <nav aria-label="Document sections">
+                  <ol className="document-outline__list">
+                    {outlineItems.map((item) => (
+                      <li key={item.id}>
+                        <button
+                          className={`document-outline__link document-outline__link--level-${item.level}${
+                            activeOutlineId === item.id ? ' is-active' : ''
+                          }`}
+                          type="button"
+                          title={item.text}
+                          aria-current={activeOutlineId === item.id ? 'location' : undefined}
+                          onClick={() => jumpToOutlineItem(item)}
+                        >
+                          {item.text}
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
+                </nav>
+              )}
+            </aside>
+          )}
+        </div>
       )}
     </main>
   )

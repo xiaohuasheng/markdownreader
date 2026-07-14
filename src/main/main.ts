@@ -1,14 +1,15 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'electron'
+import { watch, type FSWatcher } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { buildAppMenu } from './menu'
 import { addRecentPath } from './recentFiles'
 import {
   isDirectoryPath,
-  isMarkdownPath,
-  pickMarkdownFile,
+  isSupportedDocumentPath,
+  pickDocumentFile,
   pickMarkdownFolder,
-  readMarkdownFile,
+  readDocumentFile,
   readMarkdownFolder,
   saveMarkdownFile
 } from './file'
@@ -24,13 +25,21 @@ protocol.registerSchemesAsPrivileged([
   }
 ])
 
-let mainWindow: BrowserWindow | null = null
-let pendingOpenPaths: string[] = []
+type FolderWatchState = {
+  folderPath: string
+  watcher: FSWatcher
+  refreshTimer: NodeJS.Timeout | null
+}
+
+const windows = new Set<BrowserWindow>()
+const pendingOpenPaths: string[] = []
+const folderWatches = new Map<BrowserWindow, FolderWatchState>()
 
 function rebuildMenu(): void {
   buildAppMenu({
     openFile: () => openMarkdownFile(),
     openFolder: () => openMarkdownFolder(),
+    openFolderInNewWindow: () => openMarkdownFolderInNewWindow(),
     openRecentPath: (recentPath) => openMarkdownPath(recentPath)
   })
 }
@@ -77,45 +86,66 @@ function createWindow(): BrowserWindow {
     window.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  mainWindow = window
+  windows.add(window)
   window.webContents.once('did-finish-load', () => {
-    void flushPendingOpenPaths()
+    void flushPendingOpenPaths(window)
+  })
+  window.on('closed', () => {
+    stopWatchingMarkdownFolder(window)
+    windows.delete(window)
   })
 
   return window
 }
 
-async function flushPendingOpenPaths(): Promise<void> {
-  const paths = pendingOpenPaths
-  pendingOpenPaths = []
+async function flushPendingOpenPaths(window: BrowserWindow): Promise<void> {
+  const paths = pendingOpenPaths.splice(0)
 
   for (const filePath of paths) {
-    await openMarkdownPath(filePath)
+    await openMarkdownPath(filePath, window)
   }
 }
 
-async function openMarkdownPath(filePath: string): Promise<void> {
-  if (isDirectoryPath(filePath)) {
-    await openMarkdownFolder(filePath)
+function resolveTargetWindow(window?: BrowserWindow | null): BrowserWindow {
+  return window && !window.isDestroyed() ? window : BrowserWindow.getFocusedWindow() ?? createWindow()
+}
+
+function sendToRenderer(window: BrowserWindow, channel: string, payload: unknown): void {
+  if (window.webContents.isLoading()) {
+    window.webContents.once('did-finish-load', () => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(channel, payload)
+      }
+    })
     return
   }
 
-  if (isMarkdownPath(filePath)) {
-    await openMarkdownFile(filePath)
+  window.webContents.send(channel, payload)
+}
+
+async function openMarkdownPath(filePath: string, targetWindow?: BrowserWindow | null): Promise<void> {
+  if (isDirectoryPath(filePath)) {
+    await openMarkdownFolder(filePath, targetWindow)
+    return
+  }
+
+  if (isSupportedDocumentPath(filePath)) {
+    await openMarkdownFile(filePath, targetWindow)
   }
 }
 
-async function openMarkdownFile(filePath?: string): Promise<void> {
+async function openMarkdownFile(filePath?: string, targetWindow?: BrowserWindow | null): Promise<void> {
   try {
-    const selectedPath = filePath ?? (await pickMarkdownFile())
+    const selectedPath = filePath ?? (await pickDocumentFile())
     if (!selectedPath) {
       return
     }
 
-    const file = await readMarkdownFile(selectedPath)
-    const window = mainWindow ?? createWindow()
+    const file = await readDocumentFile(selectedPath)
+    const window = resolveTargetWindow(targetWindow)
 
-    window.webContents.send('markdown-file-opened', file)
+    stopWatchingMarkdownFolder(window)
+    sendToRenderer(window, 'markdown-file-opened', file)
     window.setTitle(`${file.fileName} - Markdown Reader`)
     addRecentPath(file.path)
     rebuildMenu()
@@ -125,7 +155,7 @@ async function openMarkdownFile(filePath?: string): Promise<void> {
   }
 }
 
-async function openMarkdownFolder(folderPath?: string): Promise<void> {
+async function openMarkdownFolder(folderPath?: string, targetWindow?: BrowserWindow | null): Promise<void> {
   try {
     const selectedPath = folderPath ?? (await pickMarkdownFolder())
     if (!selectedPath) {
@@ -133,9 +163,10 @@ async function openMarkdownFolder(folderPath?: string): Promise<void> {
     }
 
     const folder = await readMarkdownFolder(selectedPath)
-    const window = mainWindow ?? createWindow()
+    const window = resolveTargetWindow(targetWindow)
 
-    window.webContents.send('markdown-folder-opened', folder)
+    watchMarkdownFolder(window, folder.path)
+    sendToRenderer(window, 'markdown-folder-opened', folder)
     window.setTitle(`${folder.name} - Markdown Reader`)
     addRecentPath(folder.path)
     rebuildMenu()
@@ -145,8 +176,80 @@ async function openMarkdownFolder(folderPath?: string): Promise<void> {
   }
 }
 
+async function openMarkdownFolderInNewWindow(): Promise<void> {
+  try {
+    const selectedPath = await pickMarkdownFolder()
+    if (!selectedPath) {
+      return
+    }
+
+    const window = createWindow()
+    await openMarkdownFolder(selectedPath, window)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'The folder could not be opened.'
+    dialog.showErrorBox('Unable to Open Markdown Folder', message)
+  }
+}
+
+function watchMarkdownFolder(window: BrowserWindow, folderPath: string): void {
+  stopWatchingMarkdownFolder(window)
+
+  try {
+    // macOS 构建支持递归监听；重新扫描可正确反映根目录下任意层级的新增、删除和重命名。
+    const watcher = watch(folderPath, { recursive: true }, () => {
+      scheduleMarkdownFolderRefresh(window, folderPath)
+    })
+    folderWatches.set(window, { folderPath, watcher, refreshTimer: null })
+    watcher.on('error', (error) => {
+      console.error(`Unable to watch Markdown folder ${folderPath}:`, error)
+    })
+  } catch (error) {
+    // 即使操作系统无法监听目录，打开文件夹本身仍可正常完成。
+    console.error(`Unable to watch Markdown folder ${folderPath}:`, error)
+  }
+}
+
+function stopWatchingMarkdownFolder(window: BrowserWindow): void {
+  const state = folderWatches.get(window)
+  if (!state) {
+    return
+  }
+  if (state.refreshTimer) {
+    clearTimeout(state.refreshTimer)
+  }
+  state.watcher.close()
+  folderWatches.delete(window)
+}
+
+function scheduleMarkdownFolderRefresh(window: BrowserWindow, folderPath: string): void {
+  const state = folderWatches.get(window)
+  if (!state || state.folderPath !== folderPath) {
+    return
+  }
+  if (state.refreshTimer) {
+    clearTimeout(state.refreshTimer)
+  }
+
+  state.refreshTimer = setTimeout(() => {
+    state.refreshTimer = null
+    void refreshMarkdownFolder(window, folderPath)
+  }, 200)
+}
+
+async function refreshMarkdownFolder(window: BrowserWindow, folderPath: string): Promise<void> {
+  try {
+    const folder = await readMarkdownFolder(folderPath)
+    if (folderWatches.get(window)?.folderPath === folderPath && !window.isDestroyed()) {
+      sendToRenderer(window, 'markdown-folder-updated', folder)
+    }
+  } catch (error) {
+    // 文件夹可能在文件事件和扫描之间被移动或删除。
+    console.error(`Unable to refresh Markdown folder ${folderPath}:`, error)
+  }
+}
+
 function getInitialMarkdownPaths(): string[] {
-  return process.argv.filter((argument) => isMarkdownPath(argument) || isDirectoryPath(argument))
+  return process.argv.filter((argument) => isSupportedDocumentPath(argument) || isDirectoryPath(argument))
 }
 
 function registerLocalFileProtocol(): void {
@@ -161,27 +264,30 @@ function registerLocalFileProtocol(): void {
 
 app.whenReady().then(() => {
   registerLocalFileProtocol()
-  pendingOpenPaths = getInitialMarkdownPaths()
+  pendingOpenPaths.push(...getInitialMarkdownPaths())
 
-  ipcMain.handle('open-markdown-file', async () => {
-    await openMarkdownFile()
+  ipcMain.handle('open-markdown-file', async (event) => {
+    await openMarkdownFile(undefined, BrowserWindow.fromWebContents(event.sender))
   })
 
-  ipcMain.handle('open-markdown-folder', async () => {
-    await openMarkdownFolder()
+  ipcMain.handle('open-markdown-folder', async (event) => {
+    await openMarkdownFolder(undefined, BrowserWindow.fromWebContents(event.sender))
   })
 
-  ipcMain.handle('read-markdown-file', async (_event, filePath: string) => readMarkdownFile(filePath))
+  ipcMain.handle('open-markdown-folder-in-new-window', async () => {
+    await openMarkdownFolderInNewWindow()
+  })
 
-  ipcMain.handle('save-markdown-file', async (_event, filePath: string, content: string) => {
+  ipcMain.handle('read-markdown-file', async (_event, filePath: string) => readDocumentFile(filePath))
+
+  ipcMain.handle('save-markdown-file', async (event, filePath: string, content: string) => {
     const file = await saveMarkdownFile(filePath, content)
-    mainWindow?.setTitle(`${file.fileName} - Markdown Reader`)
+    BrowserWindow.fromWebContents(event.sender)?.setTitle(`${file.fileName} - Markdown Reader`)
 
     return file
   })
 
   rebuildMenu()
-
   createWindow()
 
   app.on('activate', () => {
@@ -194,14 +300,14 @@ app.whenReady().then(() => {
 app.on('open-file', (event, filePath) => {
   event.preventDefault()
 
-  if (!isMarkdownPath(filePath) && !isDirectoryPath(filePath)) {
+  if (!isSupportedDocumentPath(filePath) && !isDirectoryPath(filePath)) {
     return
   }
 
-  // macOS sends this when Finder/Open With or a Dock icon drop targets the app.
-  // Queue it until the renderer is loaded so launched documents are not lost.
-  if (app.isReady() && mainWindow) {
-    void openMarkdownPath(filePath)
+  // macOS 从 Finder、Open With 或 Dock 拖入应用时会触发该事件。
+  if (app.isReady()) {
+    const targetWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? createWindow()
+    void openMarkdownPath(filePath, targetWindow)
   } else {
     pendingOpenPaths.push(filePath)
   }
@@ -210,5 +316,11 @@ app.on('open-file', (event, filePath) => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
+  }
+})
+
+app.on('before-quit', () => {
+  for (const window of windows) {
+    stopWatchingMarkdownFolder(window)
   }
 })

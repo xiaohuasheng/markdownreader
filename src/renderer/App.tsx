@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactElement } from 'react'
 import mermaid from 'mermaid'
-import { renderMarkdown } from './markdown'
+import { renderHtml, renderMarkdown } from './markdown'
 import type { MarkdownFile, MarkdownFileTreeNode, MarkdownFolder } from '../preload/preload'
 
 type ViewMode = 'edit' | 'preview'
@@ -21,6 +21,9 @@ function Welcome(): ReactElement {
         <div className="welcome__actions">
           <button className="primary-button" type="button" onClick={() => window.markdownReader.openFolder()}>
             Open Folder
+          </button>
+          <button className="secondary-button" type="button" onClick={() => window.markdownReader.openFolderInNewWindow()}>
+            Open Folder in New Window
           </button>
           <button className="secondary-button" type="button" onClick={() => window.markdownReader.openFile()}>
             Open File
@@ -110,7 +113,11 @@ function Reader({
   onSave: () => Promise<void>
   isEmbedded?: boolean
 }): ReactElement {
-  const html = useMemo(() => renderMarkdown(file.content, file.directory), [file.content, file.directory])
+  const isReadOnly = file.kind === 'html'
+  const html = useMemo(
+    () => (isReadOnly ? renderHtml(file.content) : renderMarkdown(file.content, file.directory)),
+    [file.content, file.directory, isReadOnly]
+  )
 
   useEffect(() => {
     if (mode !== 'preview') {
@@ -132,35 +139,42 @@ function Reader({
           <h1>{file.fileName}</h1>
         </div>
         <div className="reader__actions">
-          <div className="segmented-control" aria-label="View mode">
-            <button
-              className={mode === 'edit' ? 'is-active' : ''}
-              type="button"
-              onClick={() => onModeChange('edit')}
-            >
-              Edit
-            </button>
-            <button
-              className={mode === 'preview' ? 'is-active' : ''}
-              type="button"
-              onClick={() => onModeChange('preview')}
-            >
-              Preview
-            </button>
-          </div>
+          {!isReadOnly && (
+            <div className="segmented-control" aria-label="View mode">
+              <button
+                className={mode === 'edit' ? 'is-active' : ''}
+                type="button"
+                onClick={() => onModeChange('edit')}
+              >
+                Edit
+              </button>
+              <button
+                className={mode === 'preview' ? 'is-active' : ''}
+                type="button"
+                onClick={() => onModeChange('preview')}
+              >
+                Preview
+              </button>
+            </div>
+          )}
           <button className="secondary-button" type="button" onClick={() => window.markdownReader.openFile()}>
             Open
           </button>
           <button className="secondary-button" type="button" onClick={() => window.markdownReader.openFolder()}>
             Folder
           </button>
-          <button className="primary-button primary-button--compact" type="button" disabled={isSaving} onClick={onSave}>
-            {isSaving ? 'Saving' : 'Save'}
+          <button className="secondary-button" type="button" onClick={() => window.markdownReader.openFolderInNewWindow()}>
+            New Folder Window
           </button>
+          {!isReadOnly && (
+            <button className="primary-button primary-button--compact" type="button" disabled={isSaving} onClick={onSave}>
+              {isSaving ? 'Saving' : 'Save'}
+            </button>
+          )}
         </div>
       </header>
       {message && <p className="reader__message">{message}</p>}
-      {mode === 'edit' ? (
+      {!isReadOnly && mode === 'edit' ? (
         <textarea
           className="markdown-editor"
           aria-label="Markdown editor"
@@ -203,6 +217,14 @@ export default function App(): ReactElement {
         setDraft('')
         setMode('preview')
         setMessage(openedFolder.files.length > 0 ? 'Select a Markdown file from the folder.' : 'No Markdown files found.')
+      }),
+    []
+  )
+
+  useEffect(
+    () =>
+      window.markdownReader.onFolderUpdated((updatedFolder) => {
+        setFolder(updatedFolder)
       }),
     []
   )

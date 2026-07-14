@@ -55,6 +55,17 @@
         "mimeType": "text/markdown",
         "role": "Editor",
         "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "html",
+          "htm"
+        ],
+        "name": "HTML Document",
+        "description": "Read-only HTML document",
+        "mimeType": "text/html",
+        "role": "Viewer",
+        "rank": "Alternate"
       }
     ],
     "mac": {

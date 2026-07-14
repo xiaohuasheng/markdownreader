@@ -3,11 +3,14 @@ import { statSync } from 'node:fs'
 import { readFile, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
+export type DocumentKind = 'markdown' | 'html'
+
 export type MarkdownFile = {
   path: string
   fileName: string
   directory: string
   content: string
+  kind: DocumentKind
 }
 
 export type MarkdownFileTreeNode = {
@@ -24,10 +27,20 @@ export type MarkdownFolder = {
 }
 
 const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown'])
+const HTML_EXTENSIONS = new Set(['.html', '.htm'])
 const IGNORED_DIRECTORY_NAMES = new Set(['.git', 'node_modules', '.DS_Store'])
 
 export function isMarkdownPath(filePath: string): boolean {
   return MARKDOWN_EXTENSIONS.has(path.extname(filePath).toLowerCase())
+}
+
+export function isSupportedDocumentPath(filePath: string): boolean {
+  const extension = path.extname(filePath).toLowerCase()
+  return MARKDOWN_EXTENSIONS.has(extension) || HTML_EXTENSIONS.has(extension)
+}
+
+function getDocumentKind(filePath: string): DocumentKind {
+  return isMarkdownPath(filePath) ? 'markdown' : 'html'
 }
 
 export function isDirectoryPath(filePath: string): boolean {
@@ -38,12 +51,13 @@ export function isDirectoryPath(filePath: string): boolean {
   }
 }
 
-export async function pickMarkdownFile(): Promise<string | null> {
+export async function pickDocumentFile(): Promise<string | null> {
   const result = await dialog.showOpenDialog({
-    title: 'Open Markdown File',
+    title: 'Open Document',
     properties: ['openFile'],
     filters: [
       { name: 'Markdown Documents', extensions: ['md', 'markdown'] },
+      { name: 'HTML Documents', extensions: ['html', 'htm'] },
       { name: 'All Files', extensions: ['*'] }
     ]
   })
@@ -68,9 +82,9 @@ export async function pickMarkdownFolder(): Promise<string | null> {
   return result.filePaths[0]
 }
 
-export async function readMarkdownFile(filePath: string): Promise<MarkdownFile> {
-  if (!isMarkdownPath(filePath)) {
-    throw new Error('Only .md and .markdown files can be opened.')
+export async function readDocumentFile(filePath: string): Promise<MarkdownFile> {
+  if (!isSupportedDocumentPath(filePath)) {
+    throw new Error('Only Markdown and HTML files can be opened.')
   }
 
   const content = await readFile(filePath, 'utf8')
@@ -78,7 +92,8 @@ export async function readMarkdownFile(filePath: string): Promise<MarkdownFile> 
     path: filePath,
     fileName: path.basename(filePath),
     directory: path.dirname(filePath),
-    content
+    content,
+    kind: getDocumentKind(filePath)
   }
 }
 
@@ -88,7 +103,7 @@ export async function saveMarkdownFile(filePath: string, content: string): Promi
   }
 
   await writeFile(filePath, content, 'utf8')
-  return readMarkdownFile(filePath)
+  return readDocumentFile(filePath)
 }
 
 function compareTreeNodes(left: MarkdownFileTreeNode, right: MarkdownFileTreeNode): number {
@@ -127,7 +142,7 @@ async function scanMarkdownDirectory(directoryPath: string): Promise<MarkdownFil
       continue
     }
 
-    if (entry.isFile() && isMarkdownPath(entryPath)) {
+    if (entry.isFile() && isSupportedDocumentPath(entryPath)) {
       nodes.push({
         type: 'file',
         path: entryPath,

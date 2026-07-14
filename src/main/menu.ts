@@ -5,6 +5,7 @@ import { clearRecentPaths, getRecentPaths } from './recentFiles'
 export type MenuActions = {
   openFile: () => Promise<void>
   openFolder: () => Promise<void>
+  openFolderInNewWindow: () => Promise<void>
   openRecentPath: (filePath: string) => Promise<void>
 }
 
@@ -45,6 +46,11 @@ function rebuild(actions: MenuActions): void {
           label: 'Open Folder',
           accelerator: 'Shift+Command+O',
           click: () => actions.openFolder()
+        },
+        {
+          label: 'Open Folder in New Window',
+          accelerator: 'Shift+Command+N',
+          click: () => actions.openFolderInNewWindow()
         },
         {
           label: 'Open Recent',

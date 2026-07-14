@@ -271,3 +271,32 @@ export function renderMarkdown(content: string, baseDirectory: string): string {
     sanitized
   )
 }
+
+export function renderHtml(content: string): string {
+  // HTML 仅用于阅读文本结构，不允许执行脚本、加载资源或提交表单。
+  return DOMPurify.sanitize(content, {
+    FORBID_TAGS: [
+      'script',
+      'style',
+      'iframe',
+      'frame',
+      'object',
+      'embed',
+      'form',
+      'input',
+      'button',
+      'textarea',
+      'select',
+      'option',
+      'link',
+      'meta',
+      'base',
+      'svg',
+      'math',
+      'audio',
+      'video',
+      'canvas'
+    ],
+    FORBID_ATTR: ['style', 'src', 'srcset', 'href', 'target', 'action', 'method']
+  })
+}

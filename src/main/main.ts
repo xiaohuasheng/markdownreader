@@ -1,9 +1,9 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'electron'
 import { watch, type FSWatcher } from 'node:fs'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { buildAppMenu } from './menu'
-import { addRecentPath } from './recentFiles'
+import { addRecentPath, clearRecentPaths as clearStoredRecentPaths, getRecentPaths } from './recentFiles'
 import {
   isDirectoryPath,
   isSupportedDocumentPath,
@@ -31,17 +31,62 @@ type FolderWatchState = {
   refreshTimer: NodeJS.Timeout | null
 }
 
+type DocumentWatchState = {
+  filePath: string
+  watcher: FSWatcher
+  refreshTimer: NodeJS.Timeout | null
+  lastKnownContent: string
+  pendingWriteContent: string | null
+}
+
+type RecentItem = {
+  path: string
+  name: string
+  kind: 'file' | 'folder'
+}
+
 const windows = new Set<BrowserWindow>()
 const pendingOpenPaths: string[] = []
 const folderWatches = new Map<BrowserWindow, FolderWatchState>()
+const documentWatches = new Map<BrowserWindow, DocumentWatchState>()
 
 function rebuildMenu(): void {
   buildAppMenu({
     openFile: () => openMarkdownFile(),
     openFolder: () => openMarkdownFolder(),
     openFolderInNewWindow: () => openMarkdownFolderInNewWindow(),
-    openRecentPath: (recentPath) => openMarkdownPath(recentPath)
+    openRecentPath: (recentPath) => openMarkdownPath(recentPath),
+    clearRecentPaths: clearRecentItems
   })
+}
+
+function getRecentItems(): RecentItem[] {
+  return getRecentPaths().map((recentPath) => ({
+    path: recentPath,
+    name: basename(recentPath),
+    kind: isDirectoryPath(recentPath) ? 'folder' : 'file'
+  }))
+}
+
+function notifyRecentItemsChanged(): void {
+  const recentItems = getRecentItems()
+
+  for (const window of windows) {
+    if (!window.isDestroyed()) {
+      sendToRenderer(window, 'recent-items-updated', recentItems)
+    }
+  }
+}
+
+function recordRecentPath(recentPath: string): void {
+  addRecentPath(recentPath)
+  rebuildMenu()
+  notifyRecentItemsChanged()
+}
+
+function clearRecentItems(): void {
+  clearStoredRecentPaths()
+  notifyRecentItemsChanged()
 }
 
 function createWindow(): BrowserWindow {
@@ -92,6 +137,7 @@ function createWindow(): BrowserWindow {
   })
   window.on('closed', () => {
     stopWatchingMarkdownFolder(window)
+    stopWatchingDocument(window)
     windows.delete(window)
   })
 
@@ -145,10 +191,10 @@ async function openMarkdownFile(filePath?: string, targetWindow?: BrowserWindow 
     const window = resolveTargetWindow(targetWindow)
 
     stopWatchingMarkdownFolder(window)
+    watchDocument(window, file.path, file.content)
     sendToRenderer(window, 'markdown-file-opened', file)
     window.setTitle(`${file.fileName} - Markdown Reader`)
-    addRecentPath(file.path)
-    rebuildMenu()
+    recordRecentPath(file.path)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'The file could not be opened.'
     dialog.showErrorBox('Unable to Open Markdown File', message)
@@ -165,11 +211,11 @@ async function openMarkdownFolder(folderPath?: string, targetWindow?: BrowserWin
     const folder = await readMarkdownFolder(selectedPath)
     const window = resolveTargetWindow(targetWindow)
 
+    stopWatchingDocument(window)
     watchMarkdownFolder(window, folder.path)
     sendToRenderer(window, 'markdown-folder-opened', folder)
     window.setTitle(`${folder.name} - Markdown Reader`)
-    addRecentPath(folder.path)
-    rebuildMenu()
+    recordRecentPath(folder.path)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'The folder could not be opened.'
     dialog.showErrorBox('Unable to Open Markdown Folder', message)
@@ -248,6 +294,85 @@ async function refreshMarkdownFolder(window: BrowserWindow, folderPath: string):
   }
 }
 
+function watchDocument(window: BrowserWindow, filePath: string, initialContent: string): void {
+  stopWatchingDocument(window)
+
+  try {
+    // 监听父目录而不是文件 inode，兼容编辑器通过“临时文件 + 重命名”替换原文件的保存方式。
+    const watchedFileName = basename(filePath)
+    const watcher = watch(dirname(filePath), (_eventType, changedFileName) => {
+      if (changedFileName === null || changedFileName.toString() === watchedFileName) {
+        scheduleDocumentRefresh(window, filePath)
+      }
+    })
+
+    documentWatches.set(window, {
+      filePath,
+      watcher,
+      refreshTimer: null,
+      lastKnownContent: initialContent,
+      pendingWriteContent: null
+    })
+    watcher.on('error', (error) => {
+      console.error(`Unable to watch document ${filePath}:`, error)
+    })
+  } catch (error) {
+    // 监听失败不影响文件打开和手动保存。
+    console.error(`Unable to watch document ${filePath}:`, error)
+  }
+}
+
+function stopWatchingDocument(window: BrowserWindow): void {
+  const state = documentWatches.get(window)
+  if (!state) {
+    return
+  }
+
+  if (state.refreshTimer) {
+    clearTimeout(state.refreshTimer)
+  }
+  state.watcher.close()
+  documentWatches.delete(window)
+}
+
+function scheduleDocumentRefresh(window: BrowserWindow, filePath: string): void {
+  const state = documentWatches.get(window)
+  if (!state || state.filePath !== filePath) {
+    return
+  }
+
+  if (state.refreshTimer) {
+    clearTimeout(state.refreshTimer)
+  }
+
+  state.refreshTimer = setTimeout(() => {
+    state.refreshTimer = null
+    void refreshDocument(window, filePath)
+  }, 200)
+}
+
+async function refreshDocument(window: BrowserWindow, filePath: string): Promise<void> {
+  try {
+    const file = await readDocumentFile(filePath)
+    const state = documentWatches.get(window)
+
+    if (!state || state.filePath !== filePath || window.isDestroyed()) {
+      return
+    }
+
+    if (file.content === state.lastKnownContent || file.content === state.pendingWriteContent) {
+      state.lastKnownContent = file.content
+      return
+    }
+
+    state.lastKnownContent = file.content
+    sendToRenderer(window, 'markdown-file-updated', file)
+  } catch (error) {
+    // 文件可能在变更事件与读取之间被移动、删除或正处于替换过程。
+    console.error(`Unable to refresh document ${filePath}:`, error)
+  }
+}
+
 function getInitialMarkdownPaths(): string[] {
   return process.argv.filter((argument) => isSupportedDocumentPath(argument) || isDirectoryPath(argument))
 }
@@ -278,13 +403,52 @@ app.whenReady().then(() => {
     await openMarkdownFolderInNewWindow()
   })
 
-  ipcMain.handle('read-markdown-file', async (_event, filePath: string) => readDocumentFile(filePath))
+  ipcMain.handle('get-recent-items', () => getRecentItems())
 
-  ipcMain.handle('save-markdown-file', async (event, filePath: string, content: string) => {
-    const file = await saveMarkdownFile(filePath, content)
-    BrowserWindow.fromWebContents(event.sender)?.setTitle(`${file.fileName} - Markdown Reader`)
+  ipcMain.handle('open-recent-item', async (event, recentPath: string) => {
+    if (!getRecentPaths().includes(recentPath)) {
+      return
+    }
+
+    await openMarkdownPath(recentPath, BrowserWindow.fromWebContents(event.sender))
+  })
+
+  ipcMain.handle('read-markdown-file', async (event, filePath: string) => {
+    const file = await readDocumentFile(filePath)
+    const window = BrowserWindow.fromWebContents(event.sender)
+
+    if (window) {
+      watchDocument(window, file.path, file.content)
+    }
+    recordRecentPath(file.path)
 
     return file
+  })
+
+  ipcMain.handle('save-markdown-file', async (event, filePath: string, content: string) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    const watchState = window ? documentWatches.get(window) : undefined
+
+    if (watchState?.filePath === filePath) {
+      watchState.pendingWriteContent = content
+    }
+
+    try {
+      const file = await saveMarkdownFile(filePath, content)
+
+      if (watchState?.filePath === filePath) {
+        watchState.lastKnownContent = file.content
+        watchState.pendingWriteContent = null
+      }
+      window?.setTitle(`${file.fileName} - Markdown Reader`)
+
+      return file
+    } catch (error) {
+      if (watchState?.filePath === filePath) {
+        watchState.pendingWriteContent = null
+      }
+      throw error
+    }
   })
 
   rebuildMenu()
@@ -322,5 +486,6 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   for (const window of windows) {
     stopWatchingMarkdownFolder(window)
+    stopWatchingDocument(window)
   }
 })

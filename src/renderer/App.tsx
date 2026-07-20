@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import mermaid from 'mermaid'
 import { renderHtml, renderMarkdown } from './markdown'
-import type { MarkdownFile, MarkdownFileTreeNode, MarkdownFolder } from '../preload/preload'
+import type { MarkdownFile, MarkdownFileTreeNode, MarkdownFolder, RecentItem } from '../preload/preload'
 
 type ViewMode = 'edit' | 'preview'
 type DocumentOutlineItem = {
@@ -91,23 +91,118 @@ mermaid.initialize({
   theme: 'neutral'
 })
 
+function RecentItemGroup({
+  title,
+  items,
+  emptyMessage
+}: {
+  title: string
+  items: RecentItem[]
+  emptyMessage: string
+}): ReactElement {
+  return (
+    <section className="recent-group" aria-label={title}>
+      <div className="recent-group__header">
+        <h2>{title}</h2>
+        <span>{items.length.toString().padStart(2, '0')}</span>
+      </div>
+      {items.length > 0 ? (
+        <ol className="recent-list">
+          {items.map((item) => (
+            <li key={item.path}>
+              <button
+                className="recent-item"
+                type="button"
+                title={item.path}
+                onClick={() => void window.markdownReader.openRecentItem(item.path)}
+              >
+                <span className={`recent-item__icon recent-item__icon--${item.kind}`} aria-hidden="true" />
+                <span className="recent-item__copy">
+                  <strong>{item.name}</strong>
+                  <small>{item.path}</small>
+                </span>
+                <span className="recent-item__arrow" aria-hidden="true">
+                  →
+                </span>
+              </button>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="recent-group__empty">{emptyMessage}</p>
+      )}
+    </section>
+  )
+}
+
 function Welcome(): ReactElement {
+  const [recentItems, setRecentItems] = useState<RecentItem[]>([])
+
+  useEffect(() => {
+    let isMounted = true
+
+    void window.markdownReader.getRecentItems().then(
+      (items) => {
+        if (isMounted) {
+          setRecentItems(items)
+        }
+      },
+      () => {
+        if (isMounted) {
+          setRecentItems([])
+        }
+      }
+    )
+
+    const stopListening = window.markdownReader.onRecentItemsUpdated(setRecentItems)
+
+    return () => {
+      isMounted = false
+      stopListening()
+    }
+  }, [])
+
+  const recentFolders = recentItems.filter((item) => item.kind === 'folder')
+  const recentFiles = recentItems.filter((item) => item.kind === 'file')
+
   return (
     <main className="welcome">
       <section className="welcome__content" aria-labelledby="welcome-title">
-        <p className="welcome__eyebrow">Markdown Reader</p>
-        <h1 id="welcome-title">Read local Markdown with a quiet Typora-like surface.</h1>
-        <div className="welcome__actions">
-          <button className="primary-button" type="button" onClick={() => window.markdownReader.openFolder()}>
-            Open Folder
-          </button>
-          <button className="secondary-button" type="button" onClick={() => window.markdownReader.openFolderInNewWindow()}>
-            Open Folder in New Window
-          </button>
-          <button className="secondary-button" type="button" onClick={() => window.markdownReader.openFile()}>
-            Open File
-          </button>
+        <div className="welcome__hero">
+          <div className="welcome__intro">
+            <p className="welcome__eyebrow">Markdown Reader</p>
+            <h1 id="welcome-title">
+              Read local Markdown.
+              <em>Pick up where you left off.</em>
+            </h1>
+            <p className="welcome__summary">A quiet, local-first space for reading and editing your notes.</p>
+          </div>
+          <div className="welcome__actions">
+            <button className="primary-button" type="button" onClick={() => window.markdownReader.openFolder()}>
+              Open Folder
+            </button>
+            <button className="secondary-button" type="button" onClick={() => window.markdownReader.openFolderInNewWindow()}>
+              New Folder Window
+            </button>
+            <button className="secondary-button" type="button" onClick={() => window.markdownReader.openFile()}>
+              Open File
+            </button>
+          </div>
         </div>
+
+        <section className="welcome__recent" aria-labelledby="recent-title">
+          <header className="welcome__recent-header">
+            <div>
+              <p>Continue reading</p>
+              <h2 id="recent-title">Recent</h2>
+            </div>
+            <span>{recentItems.length} saved {recentItems.length === 1 ? 'place' : 'places'}</span>
+          </header>
+          <div className="welcome__recent-grid">
+            <RecentItemGroup title="Folders" items={recentFolders} emptyMessage="Opened folders will appear here." />
+            <RecentItemGroup title="Files" items={recentFiles} emptyMessage="Opened Markdown and HTML files will appear here." />
+          </div>
+        </section>
       </section>
     </main>
   )
@@ -176,6 +271,7 @@ function Reader({
   draft,
   mode,
   isSaving,
+  hasExternalConflict,
   message,
   onDraftChange,
   onModeChange,
@@ -186,6 +282,7 @@ function Reader({
   draft: string
   mode: ViewMode
   isSaving: boolean
+  hasExternalConflict: boolean
   message: string
   onDraftChange: (value: string) => void
   onModeChange: (mode: ViewMode) => void
@@ -455,9 +552,19 @@ function Reader({
               Find
             </button>
             {!isReadOnly && (
-              <button className="primary-button primary-button--compact" type="button" disabled={isSaving} onClick={onSave}>
-                {isSaving ? 'Saving' : 'Save'}
-              </button>
+              <>
+                {mode === 'edit' && (
+                  <span
+                    className={`reader__save-status${hasExternalConflict ? ' is-conflict' : draft !== file.content ? ' is-unsaved' : ''}`}
+                    aria-live="polite"
+                  >
+                    {hasExternalConflict ? 'External change' : isSaving ? 'Saving…' : draft !== file.content ? 'Unsaved' : 'Saved'}
+                  </span>
+                )}
+                <button className="primary-button primary-button--compact" type="button" disabled={isSaving} onClick={onSave}>
+                  {isSaving ? 'Saving' : 'Save'}
+                </button>
+              </>
             )}
           </div>
         </header>
@@ -568,11 +675,68 @@ export default function App(): ReactElement {
   const [draft, setDraft] = useState('')
   const [mode, setMode] = useState<ViewMode>('preview')
   const [isSaving, setIsSaving] = useState(false)
+  const [hasExternalConflict, setHasExternalConflict] = useState(false)
   const [message, setMessage] = useState('')
+  const saveInFlightRef = useRef(false)
+  const currentFilePathRef = useRef<string | null>(null)
+  const currentFileRef = useRef<MarkdownFile | null>(null)
+  const latestDraftRef = useRef('')
+  const failedAutoSaveRef = useRef<{ filePath: string; content: string } | null>(null)
+
+  currentFilePathRef.current = file?.path ?? null
+  currentFileRef.current = file
+  latestDraftRef.current = draft
+
+  const persistCurrentFile = useCallback(
+    async (targetFile: MarkdownFile, contentToSave: string, returnToPreview: boolean): Promise<void> => {
+      if (saveInFlightRef.current || targetFile.kind === 'html') {
+        return
+      }
+
+      saveInFlightRef.current = true
+      setIsSaving(true)
+      setMessage('')
+
+      try {
+        const savedFile = await window.markdownReader.saveFile(targetFile.path, contentToSave)
+
+        // 文件切换后到达的旧保存响应不能覆盖当前窗口中新打开的文件。
+        if (currentFilePathRef.current !== savedFile.path) {
+          return
+        }
+
+        failedAutoSaveRef.current = null
+        setHasExternalConflict(false)
+        setFile(savedFile)
+
+        if (returnToPreview && latestDraftRef.current === contentToSave) {
+          setDraft(savedFile.content)
+          setMode('preview')
+          setMessage('Saved')
+        } else if (returnToPreview) {
+          setMessage('Saved. Newer edits will be saved automatically.')
+        }
+      } catch (error) {
+        if (currentFilePathRef.current === targetFile.path) {
+          const errorMessage = error instanceof Error ? error.message : 'Unable to save this file.'
+          failedAutoSaveRef.current = returnToPreview ? null : { filePath: targetFile.path, content: contentToSave }
+          setMessage(returnToPreview ? errorMessage : `Auto-save failed: ${errorMessage}`)
+        }
+      } finally {
+        saveInFlightRef.current = false
+        setIsSaving(false)
+      }
+    },
+    []
+  )
 
   useEffect(
     () =>
       window.markdownReader.onFileOpened((openedFile) => {
+        currentFilePathRef.current = openedFile.path
+        latestDraftRef.current = openedFile.content
+        failedAutoSaveRef.current = null
+        setHasExternalConflict(false)
         setFolder(null)
         setFile(openedFile)
         setDraft(openedFile.content)
@@ -584,7 +748,37 @@ export default function App(): ReactElement {
 
   useEffect(
     () =>
+      window.markdownReader.onFileUpdated((updatedFile) => {
+        const currentFile = currentFileRef.current
+
+        if (!currentFile || currentFile.path !== updatedFile.path) {
+          return
+        }
+
+        if (latestDraftRef.current !== currentFile.content) {
+          setHasExternalConflict(true)
+          setMessage('This file changed outside Markdown Reader. Your unsaved edits were kept; click Save to overwrite the external version.')
+          return
+        }
+
+        currentFileRef.current = updatedFile
+        latestDraftRef.current = updatedFile.content
+        failedAutoSaveRef.current = null
+        setHasExternalConflict(false)
+        setFile(updatedFile)
+        setDraft(updatedFile.content)
+        setMessage('Updated from disk.')
+      }),
+    []
+  )
+
+  useEffect(
+    () =>
       window.markdownReader.onFolderOpened((openedFolder) => {
+        currentFilePathRef.current = null
+        latestDraftRef.current = ''
+        failedAutoSaveRef.current = null
+        setHasExternalConflict(false)
         setFolder(openedFolder)
         setFile(null)
         setDraft('')
@@ -602,11 +796,31 @@ export default function App(): ReactElement {
     []
   )
 
+  useEffect(() => {
+    if (!file || file.kind === 'html' || mode !== 'edit' || draft === file.content || isSaving || hasExternalConflict) {
+      return
+    }
+
+    if (failedAutoSaveRef.current?.filePath === file.path && failedAutoSaveRef.current.content === draft) {
+      return
+    }
+
+    const autoSaveTimer = window.setTimeout(() => {
+      void persistCurrentFile(file, draft, false)
+    }, 1000)
+
+    return () => window.clearTimeout(autoSaveTimer)
+  }, [draft, file, hasExternalConflict, isSaving, mode, persistCurrentFile])
+
   async function openFolderFile(filePath: string): Promise<void> {
     setMessage('')
 
     try {
       const openedFile = await window.markdownReader.readFile(filePath)
+      currentFilePathRef.current = openedFile.path
+      latestDraftRef.current = openedFile.content
+      failedAutoSaveRef.current = null
+      setHasExternalConflict(false)
       setFile(openedFile)
       setDraft(openedFile.content)
       setMode('preview')
@@ -617,27 +831,11 @@ export default function App(): ReactElement {
   }
 
   async function saveCurrentFile(): Promise<void> {
-    if (!file || isSaving) {
+    if (!file) {
       return
     }
 
-    setIsSaving(true)
-    setMessage('')
-
-    try {
-      // Save overwrites the opened file and returns a fresh read from disk, so
-      // the preview always reflects the persisted content rather than stale UI.
-      const savedFile = await window.markdownReader.saveFile(file.path, draft)
-      setFile(savedFile)
-      setDraft(savedFile.content)
-      setMode('preview')
-      setMessage('Saved')
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unable to save this file.'
-      setMessage(errorMessage)
-    } finally {
-      setIsSaving(false)
-    }
+    await persistCurrentFile(file, draft, true)
   }
 
   if (!file) {
@@ -674,6 +872,7 @@ export default function App(): ReactElement {
             draft={draft}
             mode={mode}
             isSaving={isSaving}
+            hasExternalConflict={hasExternalConflict}
             message={message}
             onDraftChange={setDraft}
             onModeChange={setMode}
@@ -693,6 +892,7 @@ export default function App(): ReactElement {
         draft={draft}
         mode={mode}
         isSaving={isSaving}
+        hasExternalConflict={hasExternalConflict}
         message={message}
         onDraftChange={setDraft}
         onModeChange={setMode}

@@ -1,12 +1,13 @@
 import { app, BrowserWindow, Menu, type MenuItemConstructorOptions } from 'electron'
 import path from 'node:path'
-import { clearRecentPaths, getRecentPaths } from './recentFiles'
+import { getRecentPaths } from './recentFiles'
 
 export type MenuActions = {
   openFile: () => Promise<void>
   openFolder: () => Promise<void>
   openFolderInNewWindow: () => Promise<void>
   openRecentPath: (filePath: string) => Promise<void>
+  clearRecentPaths: () => void
 }
 
 function rebuild(actions: MenuActions): void {
@@ -61,7 +62,7 @@ function rebuild(actions: MenuActions): void {
               label: 'Clear Recent Items',
               enabled: recentPaths.length > 0,
               click: () => {
-                clearRecentPaths()
+                actions.clearRecentPaths()
                 rebuild(actions)
               }
             }

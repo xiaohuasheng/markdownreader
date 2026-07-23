@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import mermaid from 'mermaid'
+import { MermaidDiagramViewer } from './MermaidDiagramViewer'
+import type { MermaidDiagramSnapshot } from './MermaidDiagramViewer'
 import { renderHtml, renderMarkdown } from './markdown'
 import type { MarkdownFile, MarkdownFileTreeNode, MarkdownFolder, RecentItem } from '../preload/preload'
 
@@ -301,6 +303,7 @@ function Reader({
   const [outlineItems, setOutlineItems] = useState<DocumentOutlineItem[]>([])
   const [activeOutlineId, setActiveOutlineId] = useState('')
   const [isOutlineCollapsed, setIsOutlineCollapsed] = useState(false)
+  const [activeDiagram, setActiveDiagram] = useState<MermaidDiagramSnapshot | null>(null)
   const html = useMemo(
     () => (isReadOnly ? renderHtml(file.content) : renderMarkdown(file.content, file.directory)),
     [file.content, file.directory, isReadOnly]
@@ -340,16 +343,121 @@ function Reader({
   }, [])
 
   useEffect(() => {
-    if (mode !== 'preview') {
+    const preview = previewRef.current
+
+    if (!preview || mode !== 'preview') {
       return
     }
 
-    // Mermaid mutates its placeholders into SVG after the sanitized Markdown
-    // preview has been committed, matching the rest of the render pipeline.
-    mermaid.run({ querySelector: '.markdown-body .mermaid' }).catch((error: unknown) => {
-      console.error('Unable to render Mermaid diagram', error)
-    })
+    let isDisposed = false
+    const diagrams = Array.from(preview.querySelectorAll<HTMLElement>('.mermaid'))
+
+    function markRenderedDiagramsInteractive(): void {
+      if (isDisposed) {
+        return
+      }
+
+      diagrams.forEach((diagram, index) => {
+        if (!diagram.querySelector('svg')) {
+          return
+        }
+
+        diagram.dataset.diagramInteractive = 'true'
+        diagram.tabIndex = 0
+        diagram.setAttribute('role', 'button')
+        diagram.setAttribute('aria-label', `Open Mermaid diagram ${index + 1}`)
+        diagram.setAttribute('title', 'Click to enlarge; scroll to zoom and drag to move')
+      })
+    }
+
+    // Mermaid 在已清理的 Markdown 提交到页面后生成 SVG，再补充查看器入口。
+    void mermaid
+      .run({ nodes: diagrams })
+      .then(markRenderedDiagramsInteractive)
+      .catch((error: unknown) => {
+        console.error('Unable to render Mermaid diagram', error)
+      })
+
+    return () => {
+      isDisposed = true
+      diagrams.forEach((diagram) => {
+        delete diagram.dataset.diagramInteractive
+        diagram.removeAttribute('tabindex')
+        diagram.removeAttribute('role')
+        diagram.removeAttribute('aria-label')
+        diagram.removeAttribute('title')
+      })
+    }
   }, [html, mode])
+
+  useEffect(() => {
+    const preview = previewRef.current
+
+    if (!preview || mode !== 'preview') {
+      return
+    }
+    const previewElement: HTMLElement = preview
+
+    function openDiagram(diagram: HTMLElement): void {
+      const svg = diagram.querySelector<SVGSVGElement>('svg')
+
+      if (!svg) {
+        return
+      }
+
+      const diagrams = Array.from(previewElement.querySelectorAll<HTMLElement>('.mermaid'))
+      const diagramIndex = Math.max(diagrams.indexOf(diagram), 0)
+      const headings = Array.from(previewElement.querySelectorAll<HTMLHeadingElement>(outlineHeadingSelector))
+      let title = `Diagram ${diagramIndex + 1}`
+
+      for (const heading of headings) {
+        if (heading.compareDocumentPosition(diagram) & Node.DOCUMENT_POSITION_FOLLOWING) {
+          title = heading.textContent?.trim() || title
+        } else {
+          break
+        }
+      }
+
+      setActiveDiagram({
+        id: `${file.path}-${diagramIndex}`,
+        title,
+        svg
+      })
+    }
+
+    function onClick(event: MouseEvent): void {
+      const diagram = (event.target as Element | null)?.closest<HTMLElement>('.mermaid[data-diagram-interactive="true"]')
+
+      if (diagram && previewElement.contains(diagram)) {
+        openDiagram(diagram)
+      }
+    }
+
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key !== 'Enter' && event.key !== ' ') {
+        return
+      }
+
+      const diagram = (event.target as Element | null)?.closest<HTMLElement>('.mermaid[data-diagram-interactive="true"]')
+
+      if (diagram && previewElement.contains(diagram)) {
+        event.preventDefault()
+        openDiagram(diagram)
+      }
+    }
+
+    previewElement.addEventListener('click', onClick)
+    previewElement.addEventListener('keydown', onKeyDown)
+
+    return () => {
+      previewElement.removeEventListener('click', onClick)
+      previewElement.removeEventListener('keydown', onKeyDown)
+    }
+  }, [file.path, html, mode])
+
+  useEffect(() => {
+    setActiveDiagram(null)
+  }, [file.path, mode])
 
   useEffect(() => {
     const preview = previewRef.current
@@ -513,8 +621,9 @@ function Reader({
   }
 
   return (
-    <main ref={readerRef} className={readerClassName}>
-      <div ref={stickyToolsRef} className="reader__sticky-tools">
+    <>
+      <main ref={readerRef} className={readerClassName}>
+        <div ref={stickyToolsRef} className="reader__sticky-tools">
         <header className="reader__header">
           <div>
             <p className="reader__path">{file.path}</p>
@@ -608,25 +717,25 @@ function Reader({
             </button>
           </div>
         )}
-      </div>
-      {message && <p className="reader__message">{message}</p>}
-      {!isReadOnly && mode === 'edit' ? (
-        <textarea
-          className="markdown-editor"
-          aria-label="Markdown editor"
-          value={draft}
-          spellCheck={false}
-          onChange={(event) => onDraftChange(event.target.value)}
-        />
-      ) : (
-        <div
-          className={`reader__document-layout${showsOutline ? ' reader__document-layout--with-outline' : ''}${
-            showsOutline && isOutlineCollapsed ? ' reader__document-layout--outline-collapsed' : ''
-          }`}
-        >
-          <article ref={previewRef} className="markdown-body" dangerouslySetInnerHTML={renderedHtml} />
-          {showsOutline && (
-            <aside className={`document-outline${isOutlineCollapsed ? ' document-outline--collapsed' : ''}`} aria-label="Document outline">
+        </div>
+        {message && <p className="reader__message">{message}</p>}
+        {!isReadOnly && mode === 'edit' ? (
+          <textarea
+            className="markdown-editor"
+            aria-label="Markdown editor"
+            value={draft}
+            spellCheck={false}
+            onChange={(event) => onDraftChange(event.target.value)}
+          />
+        ) : (
+          <div
+            className={`reader__document-layout${showsOutline ? ' reader__document-layout--with-outline' : ''}${
+              showsOutline && isOutlineCollapsed ? ' reader__document-layout--outline-collapsed' : ''
+            }`}
+          >
+            <article ref={previewRef} className="markdown-body" dangerouslySetInnerHTML={renderedHtml} />
+            {showsOutline && (
+              <aside className={`document-outline${isOutlineCollapsed ? ' document-outline--collapsed' : ''}`} aria-label="Document outline">
               <div className="document-outline__header">
                 {!isOutlineCollapsed && <p>Outline</p>}
                 <button
@@ -661,11 +770,13 @@ function Reader({
                   </ol>
                 </nav>
               )}
-            </aside>
-          )}
-        </div>
-      )}
-    </main>
+              </aside>
+            )}
+          </div>
+        )}
+      </main>
+      {activeDiagram && <MermaidDiagramViewer key={activeDiagram.id} diagram={activeDiagram} onClose={() => setActiveDiagram(null)} />}
+    </>
   )
 }
 

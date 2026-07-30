@@ -3,12 +3,15 @@ import { watch, type FSWatcher } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { buildAppMenu } from './menu'
+import { shouldCreateWindowForOpen } from './openBehavior'
 import { addRecentPath, clearRecentPaths as clearStoredRecentPaths, getRecentPaths } from './recentFiles'
+import { getOpenBehavior } from './settings'
 import {
   isDirectoryPath,
   isSupportedDocumentPath,
   pickDocumentFile,
   pickMarkdownFolder,
+  pickMarkdownSavePath,
   readDocumentFile,
   readMarkdownFolder,
   saveMarkdownFile
@@ -49,9 +52,12 @@ const windows = new Set<BrowserWindow>()
 const pendingOpenPaths: string[] = []
 const folderWatches = new Map<BrowserWindow, FolderWatchState>()
 const documentWatches = new Map<BrowserWindow, DocumentWatchState>()
+const presentationWindows = new Set<BrowserWindow>()
+const occupiedWindows = new Set<BrowserWindow>()
 
 function rebuildMenu(): void {
   buildAppMenu({
+    newFile: () => createNewMarkdownFile(),
     openFile: () => openMarkdownFile(),
     openFolder: () => openMarkdownFolder(),
     openFolderInNewWindow: () => openMarkdownFolderInNewWindow(),
@@ -135,9 +141,17 @@ function createWindow(): BrowserWindow {
   window.webContents.once('did-finish-load', () => {
     void flushPendingOpenPaths(window)
   })
+  window.on('leave-full-screen', () => {
+    // 用户可通过 Esc 或 macOS 系统控件退出全屏，需要同步恢复普通 Reader 布局。
+    if (presentationWindows.delete(window)) {
+      sendToRenderer(window, 'presentation-mode-changed', false)
+    }
+  })
   window.on('closed', () => {
     stopWatchingMarkdownFolder(window)
     stopWatchingDocument(window)
+    presentationWindows.delete(window)
+    occupiedWindows.delete(window)
     windows.delete(window)
   })
 
@@ -156,6 +170,17 @@ function resolveTargetWindow(window?: BrowserWindow | null): BrowserWindow {
   return window && !window.isDestroyed() ? window : BrowserWindow.getFocusedWindow() ?? createWindow()
 }
 
+function resolveOpenTargetWindow(window?: BrowserWindow | null, forceNewWindow = false): BrowserWindow {
+  const candidate = window && !window.isDestroyed() ? window : BrowserWindow.getFocusedWindow()
+  const candidateHasContent = candidate ? occupiedWindows.has(candidate) : false
+
+  if (shouldCreateWindowForOpen(getOpenBehavior(), candidateHasContent, forceNewWindow)) {
+    return createWindow()
+  }
+
+  return candidate ?? createWindow()
+}
+
 function sendToRenderer(window: BrowserWindow, channel: string, payload: unknown): void {
   if (window.webContents.isLoading()) {
     window.webContents.once('did-finish-load', () => {
@@ -169,18 +194,63 @@ function sendToRenderer(window: BrowserWindow, channel: string, payload: unknown
   window.webContents.send(channel, payload)
 }
 
-async function openMarkdownPath(filePath: string, targetWindow?: BrowserWindow | null): Promise<void> {
+function setPresentationMode(window: BrowserWindow, enabled: boolean): boolean {
+  if (window.isDestroyed()) {
+    return false
+  }
+
+  if (enabled) {
+    presentationWindows.add(window)
+  } else {
+    presentationWindows.delete(window)
+  }
+
+  if (window.isFullScreen() !== enabled) {
+    window.setFullScreen(enabled)
+  }
+
+  sendToRenderer(window, 'presentation-mode-changed', enabled)
+  return enabled
+}
+
+async function openMarkdownPath(
+  filePath: string,
+  targetWindow?: BrowserWindow | null,
+  forceNewWindow = false
+): Promise<void> {
   if (isDirectoryPath(filePath)) {
-    await openMarkdownFolder(filePath, targetWindow)
+    await openMarkdownFolder(filePath, targetWindow, forceNewWindow)
     return
   }
 
   if (isSupportedDocumentPath(filePath)) {
-    await openMarkdownFile(filePath, targetWindow)
+    await openMarkdownFile(filePath, targetWindow, forceNewWindow)
   }
 }
 
-async function openMarkdownFile(filePath?: string, targetWindow?: BrowserWindow | null): Promise<void> {
+async function createNewMarkdownFile(targetWindow?: BrowserWindow | null): Promise<void> {
+  const window = resolveTargetWindow(targetWindow)
+  const defaultDirectory = folderWatches.get(window)?.folderPath ?? ''
+  const file = {
+    path: '',
+    fileName: 'Untitled.md',
+    directory: defaultDirectory,
+    content: '',
+    kind: 'markdown' as const,
+    isNew: true
+  }
+
+  stopWatchingDocument(window)
+  occupiedWindows.add(window)
+  sendToRenderer(window, 'new-markdown-file-created', file)
+  window.setTitle('Untitled.md - Markdown Reader')
+}
+
+async function openMarkdownFile(
+  filePath?: string,
+  targetWindow?: BrowserWindow | null,
+  forceNewWindow = false
+): Promise<void> {
   try {
     const selectedPath = filePath ?? (await pickDocumentFile())
     if (!selectedPath) {
@@ -188,10 +258,11 @@ async function openMarkdownFile(filePath?: string, targetWindow?: BrowserWindow 
     }
 
     const file = await readDocumentFile(selectedPath)
-    const window = resolveTargetWindow(targetWindow)
+    const window = resolveOpenTargetWindow(targetWindow, forceNewWindow)
 
     stopWatchingMarkdownFolder(window)
     watchDocument(window, file.path, file.content)
+    occupiedWindows.add(window)
     sendToRenderer(window, 'markdown-file-opened', file)
     window.setTitle(`${file.fileName} - Markdown Reader`)
     recordRecentPath(file.path)
@@ -201,7 +272,11 @@ async function openMarkdownFile(filePath?: string, targetWindow?: BrowserWindow 
   }
 }
 
-async function openMarkdownFolder(folderPath?: string, targetWindow?: BrowserWindow | null): Promise<void> {
+async function openMarkdownFolder(
+  folderPath?: string,
+  targetWindow?: BrowserWindow | null,
+  forceNewWindow = false
+): Promise<void> {
   try {
     const selectedPath = folderPath ?? (await pickMarkdownFolder())
     if (!selectedPath) {
@@ -209,10 +284,11 @@ async function openMarkdownFolder(folderPath?: string, targetWindow?: BrowserWin
     }
 
     const folder = await readMarkdownFolder(selectedPath)
-    const window = resolveTargetWindow(targetWindow)
+    const window = resolveOpenTargetWindow(targetWindow, forceNewWindow)
 
     stopWatchingDocument(window)
     watchMarkdownFolder(window, folder.path)
+    occupiedWindows.add(window)
     sendToRenderer(window, 'markdown-folder-opened', folder)
     window.setTitle(`${folder.name} - Markdown Reader`)
     recordRecentPath(folder.path)
@@ -229,8 +305,7 @@ async function openMarkdownFolderInNewWindow(): Promise<void> {
       return
     }
 
-    const window = createWindow()
-    await openMarkdownFolder(selectedPath, window)
+    await openMarkdownFolder(selectedPath, undefined, true)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'The folder could not be opened.'
     dialog.showErrorBox('Unable to Open Markdown Folder', message)
@@ -391,6 +466,10 @@ app.whenReady().then(() => {
   registerLocalFileProtocol()
   pendingOpenPaths.push(...getInitialMarkdownPaths())
 
+  ipcMain.handle('new-markdown-file', async (event) => {
+    await createNewMarkdownFile(BrowserWindow.fromWebContents(event.sender))
+  })
+
   ipcMain.handle('open-markdown-file', async (event) => {
     await openMarkdownFile(undefined, BrowserWindow.fromWebContents(event.sender))
   })
@@ -401,6 +480,21 @@ app.whenReady().then(() => {
 
   ipcMain.handle('open-markdown-folder-in-new-window', async () => {
     await openMarkdownFolderInNewWindow()
+  })
+
+  ipcMain.handle('get-presentation-mode', (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    return window ? presentationWindows.has(window) : false
+  })
+
+  ipcMain.handle('set-presentation-mode', (event, enabled: boolean) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+
+    if (!window || typeof enabled !== 'boolean') {
+      return false
+    }
+
+    return setPresentationMode(window, enabled)
   })
 
   ipcMain.handle('get-recent-items', () => getRecentItems())
@@ -449,6 +543,26 @@ app.whenReady().then(() => {
       }
       throw error
     }
+  })
+
+  ipcMain.handle('save-new-markdown-file', async (event, content: string, defaultDirectory?: string) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    const safeDefaultDirectory = defaultDirectory && isDirectoryPath(defaultDirectory) ? defaultDirectory : undefined
+    const selectedPath = await pickMarkdownSavePath(safeDefaultDirectory)
+
+    if (!selectedPath) {
+      return null
+    }
+
+    const file = await saveMarkdownFile(selectedPath, content)
+
+    if (window) {
+      watchDocument(window, file.path, file.content)
+      window.setTitle(`${file.fileName} - Markdown Reader`)
+    }
+    recordRecentPath(file.path)
+
+    return file
   })
 
   rebuildMenu()

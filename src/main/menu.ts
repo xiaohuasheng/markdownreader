@@ -1,8 +1,10 @@
 import { app, BrowserWindow, Menu, type MenuItemConstructorOptions } from 'electron'
 import path from 'node:path'
 import { getRecentPaths } from './recentFiles'
+import { getOpenBehavior, setOpenBehavior } from './settings'
 
 export type MenuActions = {
+  newFile: () => Promise<void>
   openFile: () => Promise<void>
   openFolder: () => Promise<void>
   openFolderInNewWindow: () => Promise<void>
@@ -12,6 +14,7 @@ export type MenuActions = {
 
 function rebuild(actions: MenuActions): void {
   const recentPaths = getRecentPaths()
+  const openBehavior = getOpenBehavior()
 
   const recentFileItems: MenuItemConstructorOptions[] =
     recentPaths.length > 0
@@ -39,6 +42,12 @@ function rebuild(actions: MenuActions): void {
       label: 'File',
       submenu: [
         {
+          label: 'New Markdown File',
+          accelerator: 'Command+N',
+          click: () => actions.newFile()
+        },
+        { type: 'separator' },
+        {
           label: 'Open File',
           accelerator: 'Command+O',
           click: () => actions.openFile()
@@ -52,6 +61,29 @@ function rebuild(actions: MenuActions): void {
           label: 'Open Folder in New Window',
           accelerator: 'Shift+Command+N',
           click: () => actions.openFolderInNewWindow()
+        },
+        {
+          label: 'Open Behavior',
+          submenu: [
+            {
+              label: 'In New Window',
+              type: 'radio',
+              checked: openBehavior === 'new-window',
+              click: () => {
+                setOpenBehavior('new-window')
+                rebuild(actions)
+              }
+            },
+            {
+              label: 'Replace Current Window',
+              type: 'radio',
+              checked: openBehavior === 'replace-current',
+              click: () => {
+                setOpenBehavior('replace-current')
+                rebuild(actions)
+              }
+            }
+          ]
         },
         {
           label: 'Open Recent',

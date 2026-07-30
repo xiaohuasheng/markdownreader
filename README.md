@@ -6,6 +6,7 @@ Markdown Reader 是一个类似 Typora 阅读体验的 Electron Markdown 阅读�
 
 ## 功能
 
+- 支持从欢迎页、Reader 工具栏、`File > New Markdown File` 或 `Cmd + N` 新建 Markdown 文件；首次保存前即可切换 Preview 查看草稿，保存时可填写文件名并选择目录，保存后继续按 1 秒间隔自动保存。
 - 通过 `File > Open File`、`Cmd + O` 或欢迎页按钮打开本地 Markdown 文件。
 - 支持只读预览本地 `.html` / `.htm` 文档；仅保留文字结构，不执行脚本或加载外部资源。
 - 主进程读取文件，渲染进程不直接访问 Node.js `fs` API。
@@ -14,15 +15,18 @@ Markdown Reader 是一个类似 Typora 阅读体验的 Electron Markdown 阅读�
 - 代码块使用 `highlight.js` 做基础语法高亮。
 - 默认浅色、居中、宽度受控的专注阅读界面。
 - 打开文件后窗口标题显示当前文件名。
-- macOS 菜单包含 Open File、Open Recent、Close Window、Quit。
+- macOS 菜单包含 New Markdown File、Open File、Open Recent、Close Window、Quit。
 - 最近打开文件记录保存在 Electron `userData` 目录。
-- 欢迎页按文件夹和文件分组展示最近打开记录，点击即可在当前窗口继续阅读。
+- 欢迎页按文件夹和文件分组展示最近打开记录，点击即可继续阅读。
+- 文件或文件夹默认在新窗口打开，不覆盖已有内容；空白欢迎页会用于第一次打开。可通过 `File > Open Behavior` 持久化切换为覆盖当前窗口。
 - 已打开文件夹会自动监听其子目录的新增、删除和重命名，并刷新文件树。
 - 支持通过 `File > Open Folder in New Window` 在多个独立窗口中同时打开不同文件夹。
-- 支持在 Markdown 与只读 HTML 预览中使用 `Cmd + F`（或 Find 按钮）搜索当前文档；匹配内容会高亮，可切换上一处/下一处。
+- 支持在 Markdown 编辑、Markdown 预览与只读 HTML 预览中使用 `Cmd + F`（或 Find 按钮）搜索当前文档；每次激活搜索会全选已有关键词，直接输入即可替换；编辑时会将源码匹配滚动到视口中间、覆盖高亮并提示行号，预览时高亮渲染内容，均可切换上一处/下一处。
 - 自动识别文档中的 H1–H6 标题并在右侧生成可收起的大纲，点击章节即可跳转；窄窗口会自动隐藏大纲。
+- 支持从当前文档进入全屏演示模式，可放大或缩小正文字号；演示工具条无操作 3 秒后自动收起，演示时仍可使用、收起和展开右侧大纲。
 - Mermaid 图表可点击进入独立查看器，支持滚轮缩放、鼠标拖动、双击放大和适应窗口。
 - Markdown 编辑模式下停止输入 1 秒后自动保存，连续输入会自动延后，并显示未保存、保存中和已保存状态。
+- 在预览模式和编辑模式之间切换时，会按文档滚动进度定位到原内容附近；保存触发的预览切换同样适用。
 - 当前文档在其他编辑器中发生变化时会自动刷新；如果 Reader 中存在未保存内容，则保留草稿并提示冲突，避免静默覆盖。
 - 使用 `electron-builder` 配置 macOS DMG/ZIP 打包。
 
@@ -70,7 +74,10 @@ markdownreader/
       main.ts          # Electron 入口、窗口、IPC、本地图片协议
       menu.ts          # macOS 应用菜单和快捷键
       file.ts          # 文件选择和 Markdown 文件读取
+      markdownSavePath.ts # 新文件保存路径校验
+      openBehavior.ts  # 打开方式解析与窗口路由规则
       recentFiles.ts   # 最近打开文件存储
+      settings.ts      # 打开方式等本地持久化配置
     preload/
       preload.ts       # 安全暴露给渲染进程的 API
     renderer/
@@ -83,7 +90,7 @@ markdownreader/
 
 - `nodeIntegration` 关闭。
 - `contextIsolation` 开启。
-- 渲染进程只通过 preload 暴露的 `openFile` / `onFileOpened` API 与主进程通信。
+- 渲染进程只通过 preload 暴露的文件操作 API 与主进程通信。
 - 本地文件读取由主进程完成。
 - Markdown 原始 HTML 已禁用，渲染后的 HTML 使用 DOMPurify 清理。
 - HTTP/HTTPS 外部链接会交给系统浏览器打开，不在 Electron 内创建新窗口。
@@ -93,6 +100,7 @@ markdownreader/
 
 - 暂不支持所见即所得、导出、多标签页、文件夹管理、插件系统。
 - 最近记录可通过 macOS 菜单统一清空，欢迎页会同步更新。
+- `Open Folder in New Window` 始终强制创建新窗口，不受 `Open Behavior` 配置影响。
 - HTML 预览不支持 JavaScript、CSS、图片、表单和网页交互，仅用于阅读文字内容。
 - 本地图片支持主要面向 macOS 路径和相对路径场景。
 - DMG 未做签名和 notarization，正式分发前需要接入 Apple Developer 签名流程。

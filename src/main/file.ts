@@ -2,6 +2,7 @@ import { dialog } from 'electron'
 import { statSync } from 'node:fs'
 import { readFile, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { createDefaultMarkdownSavePath, normalizeMarkdownSavePath } from './markdownSavePath'
 
 export type DocumentKind = 'markdown' | 'html'
 
@@ -11,6 +12,7 @@ export type MarkdownFile = {
   directory: string
   content: string
   kind: DocumentKind
+  isNew?: boolean
 }
 
 export type MarkdownFileTreeNode = {
@@ -80,6 +82,21 @@ export async function pickMarkdownFolder(): Promise<string | null> {
   }
 
   return result.filePaths[0]
+}
+
+export async function pickMarkdownSavePath(defaultDirectory?: string): Promise<string | null> {
+  const result = await dialog.showSaveDialog({
+    title: 'Save Markdown File',
+    buttonLabel: 'Save',
+    defaultPath: createDefaultMarkdownSavePath(defaultDirectory),
+    filters: [{ name: 'Markdown Documents', extensions: ['md', 'markdown'] }]
+  })
+
+  if (result.canceled || !result.filePath) {
+    return null
+  }
+
+  return normalizeMarkdownSavePath(result.filePath)
 }
 
 export async function readDocumentFile(filePath: string): Promise<MarkdownFile> {

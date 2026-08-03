@@ -18,7 +18,7 @@ Markdown Reader 是一个类似 Typora 阅读体验的 Electron Markdown 阅读�
 - macOS 菜单包含 New Markdown File、Open File、Open Recent、Close Window、Quit。
 - 最近打开文件记录保存在 Electron `userData` 目录。
 - 欢迎页按文件夹和文件分组展示最近打开记录，点击即可继续阅读。
-- 文件或文件夹默认在新窗口打开，不覆盖已有内容；空白欢迎页会用于第一次打开。可通过 `File > Open Behavior` 持久化切换为覆盖当前窗口。
+- 文件或文件夹默认在新窗口打开，不覆盖已有内容；空白欢迎页会用于第一次打开。同一个文件再次打开时会直接激活已有窗口。可通过 `File > Open Behavior` 持久化切换为覆盖当前窗口。
 - 已打开文件夹会自动监听其子目录的新增、删除和重命名，并刷新文件树。
 - 支持通过 `File > Open Folder in New Window` 在多个独立窗口中同时打开不同文件夹。
 - 支持在 Markdown 编辑、Markdown 预览与只读 HTML 预览中使用 `Cmd + F`（或 Find 按钮）搜索当前文档；每次激活搜索会全选已有关键词，直接输入即可替换；编辑时会将源码匹配滚动到视口中间、覆盖高亮并提示行号，预览时高亮渲染内容，均可切换上一处/下一处。
@@ -72,6 +72,7 @@ markdownreader/
   src/
     main/
       main.ts          # Electron 入口、窗口、IPC、本地图片协议
+      documentWindow.ts # 同一文件的窗口复用与真实路径识别
       menu.ts          # macOS 应用菜单和快捷键
       file.ts          # 文件选择和 Markdown 文件读取
       markdownSavePath.ts # 新文件保存路径校验

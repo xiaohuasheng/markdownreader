@@ -1389,6 +1389,10 @@ export default function App(): ReactElement {
 
     try {
       const openedFile = await window.markdownReader.readFile(filePath)
+
+      if (!openedFile) {
+        return
+      }
       currentFilePathRef.current = openedFile.path
       latestDraftRef.current = openedFile.content
       failedAutoSaveRef.current = null

@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'elect
 import { watch, type FSWatcher } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { documentPathKey, DocumentWindowRegistry } from './documentWindow'
 import { buildAppMenu } from './menu'
 import { shouldCreateWindowForOpen } from './openBehavior'
 import { addRecentPath, clearRecentPaths as clearStoredRecentPaths, getRecentPaths } from './recentFiles'
@@ -54,6 +55,8 @@ const folderWatches = new Map<BrowserWindow, FolderWatchState>()
 const documentWatches = new Map<BrowserWindow, DocumentWatchState>()
 const presentationWindows = new Set<BrowserWindow>()
 const occupiedWindows = new Set<BrowserWindow>()
+const documentWindows = new DocumentWindowRegistry<BrowserWindow>()
+const pendingDocumentOpens = new Map<string, Promise<BrowserWindow>>()
 
 function rebuildMenu(): void {
   buildAppMenu({
@@ -150,6 +153,7 @@ function createWindow(): BrowserWindow {
   window.on('closed', () => {
     stopWatchingMarkdownFolder(window)
     stopWatchingDocument(window)
+    documentWindows.delete(window)
     presentationWindows.delete(window)
     occupiedWindows.delete(window)
     windows.delete(window)
@@ -179,6 +183,30 @@ function resolveOpenTargetWindow(window?: BrowserWindow | null, forceNewWindow =
   }
 
   return candidate ?? createWindow()
+}
+
+function findOpenDocumentWindow(filePath: string): BrowserWindow | null {
+  const window = documentWindows.get(filePath)
+
+  if (!window) {
+    return null
+  }
+
+  if (window.isDestroyed()) {
+    documentWindows.delete(window)
+    return null
+  }
+
+  return window
+}
+
+function activateWindow(window: BrowserWindow): void {
+  if (window.isMinimized()) {
+    window.restore()
+  }
+
+  window.show()
+  window.focus()
 }
 
 function sendToRenderer(window: BrowserWindow, channel: string, payload: unknown): void {
@@ -241,6 +269,7 @@ async function createNewMarkdownFile(targetWindow?: BrowserWindow | null): Promi
   }
 
   stopWatchingDocument(window)
+  documentWindows.delete(window)
   occupiedWindows.add(window)
   sendToRenderer(window, 'new-markdown-file-created', file)
   window.setTitle('Untitled.md - Markdown Reader')
@@ -251,21 +280,66 @@ async function openMarkdownFile(
   targetWindow?: BrowserWindow | null,
   forceNewWindow = false
 ): Promise<void> {
+  let selectedPath: string | null
+
   try {
-    const selectedPath = filePath ?? (await pickDocumentFile())
+    selectedPath = filePath ?? (await pickDocumentFile())
     if (!selectedPath) {
       return
     }
 
-    const file = await readDocumentFile(selectedPath)
-    const window = resolveOpenTargetWindow(targetWindow, forceNewWindow)
+    const pathKey = documentPathKey(selectedPath)
+    const existingWindow = findOpenDocumentWindow(pathKey)
 
-    stopWatchingMarkdownFolder(window)
-    watchDocument(window, file.path, file.content)
-    occupiedWindows.add(window)
-    sendToRenderer(window, 'markdown-file-opened', file)
-    window.setTitle(`${file.fileName} - Markdown Reader`)
-    recordRecentPath(file.path)
+    if (existingWindow) {
+      activateWindow(existingWindow)
+      recordRecentPath(pathKey)
+      return
+    }
+
+    const pendingOpen = pendingDocumentOpens.get(pathKey)
+
+    if (pendingOpen) {
+      try {
+        activateWindow(await pendingOpen)
+      } catch {
+        // 首次打开负责展示读取错误，重复请求只等待同一结果。
+      }
+      return
+    }
+
+    const openPromise = (async (): Promise<BrowserWindow> => {
+      const file = await readDocumentFile(pathKey)
+      const windowOpenedWhileReading = findOpenDocumentWindow(pathKey)
+
+      if (windowOpenedWhileReading) {
+        activateWindow(windowOpenedWhileReading)
+        recordRecentPath(pathKey)
+        return windowOpenedWhileReading
+      }
+
+      const window = resolveOpenTargetWindow(targetWindow, forceNewWindow)
+
+      stopWatchingMarkdownFolder(window)
+      watchDocument(window, file.path, file.content)
+      documentWindows.set(window, file.path)
+      occupiedWindows.add(window)
+      sendToRenderer(window, 'markdown-file-opened', file)
+      window.setTitle(`${file.fileName} - Markdown Reader`)
+      recordRecentPath(file.path)
+
+      return window
+    })()
+
+    pendingDocumentOpens.set(pathKey, openPromise)
+
+    try {
+      await openPromise
+    } finally {
+      if (pendingDocumentOpens.get(pathKey) === openPromise) {
+        pendingDocumentOpens.delete(pathKey)
+      }
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'The file could not be opened.'
     dialog.showErrorBox('Unable to Open Markdown File', message)
@@ -287,6 +361,7 @@ async function openMarkdownFolder(
     const window = resolveOpenTargetWindow(targetWindow, forceNewWindow)
 
     stopWatchingDocument(window)
+    documentWindows.delete(window)
     watchMarkdownFolder(window, folder.path)
     occupiedWindows.add(window)
     sendToRenderer(window, 'markdown-folder-opened', folder)
@@ -508,11 +583,20 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('read-markdown-file', async (event, filePath: string) => {
-    const file = await readDocumentFile(filePath)
     const window = BrowserWindow.fromWebContents(event.sender)
+    const existingWindow = findOpenDocumentWindow(filePath)
+
+    if (existingWindow && existingWindow !== window) {
+      activateWindow(existingWindow)
+      recordRecentPath(documentPathKey(filePath))
+      return null
+    }
+
+    const file = await readDocumentFile(documentPathKey(filePath))
 
     if (window) {
       watchDocument(window, file.path, file.content)
+      documentWindows.set(window, file.path)
     }
     recordRecentPath(file.path)
 
@@ -558,6 +642,7 @@ app.whenReady().then(() => {
 
     if (window) {
       watchDocument(window, file.path, file.content)
+      documentWindows.set(window, file.path)
       window.setTitle(`${file.fileName} - Markdown Reader`)
     }
     recordRecentPath(file.path)

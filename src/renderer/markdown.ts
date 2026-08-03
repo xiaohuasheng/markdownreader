@@ -6,6 +6,7 @@ import type StateBlock from 'markdown-it/lib/rules_block/state_block.mjs'
 import type StateCore from 'markdown-it/lib/rules_core/state_core.mjs'
 import type StateInline from 'markdown-it/lib/rules_inline/state_inline.mjs'
 import type Token from 'markdown-it/lib/token.mjs'
+import { normalizeMarkdownTables } from './markdownTable'
 
 type MarkdownEnv = {
   baseDirectory?: string
@@ -248,7 +249,7 @@ md.renderer.rules.link_open = (tokens, index, options, _env, self) => {
 
 export function renderMarkdown(content: string, baseDirectory: string): string {
   const env: MarkdownEnv = { baseDirectory }
-  const html = md.render(content, env)
+  const html = md.render(normalizeMarkdownTables(content), env)
 
   const sanitized = DOMPurify.sanitize(html, {
     ADD_TAGS: ['input'],

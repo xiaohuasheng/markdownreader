@@ -1318,7 +1318,9 @@ button:focus-visible {
 
 .markdown-body table {
   display: block;
-  width: 100%;
+  /* 宽表按内容自然展开，超出正文宽度时仅在表格内部横向滚动。 */
+  width: max-content;
+  max-width: 100%;
   overflow-x: auto;
   border-collapse: collapse;
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;

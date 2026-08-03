@@ -39,7 +39,7 @@ export type MarkdownReaderApi = {
   setPresentationMode: (enabled: boolean) => Promise<boolean>
   getRecentItems: () => Promise<RecentItem[]>
   openRecentItem: (recentPath: string) => Promise<void>
-  readFile: (filePath: string) => Promise<MarkdownFile>
+  readFile: (filePath: string) => Promise<MarkdownFile | null>
   saveFile: (filePath: string, content: string) => Promise<MarkdownFile>
   saveNewFile: (content: string, defaultDirectory?: string) => Promise<MarkdownFile | null>
   onRecentItemsUpdated: (callback: (recentItems: RecentItem[]) => void) => () => void
